@@ -281,11 +281,17 @@ input:focus {
 .chat-search input { flex: 1; }
 
 .chat-list {
-  max-height: 220px;
+  max-height: 280px;
   overflow-y: auto;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface-2);
+  contain: strict;
+}
+
+.load-more-chats {
+  width: calc(100% - 16px);
+  margin: 8px;
 }
 
 .chat-item {
