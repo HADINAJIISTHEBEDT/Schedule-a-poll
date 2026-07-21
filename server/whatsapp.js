@@ -8,6 +8,46 @@ let connectionState = 'disconnected';
 let lastQr = null;
 let lastQrDataUrl = null;
 let connectedInfo = null;
+let cachedChats = [];
+let chatsLoading = false;
+
+function formatChat(chat) {
+  const name = chat.name || chat.id?.user || chat.id?._serialized || 'Unknown chat';
+  return {
+    id: chat.id._serialized,
+    name,
+    isGroup: Boolean(chat.isGroup),
+    unreadCount: chat.unreadCount || 0,
+    lastMessage: chat.lastMessage?.body?.slice(0, 60) || '',
+  };
+}
+
+async function fetchAndCacheChats(retries = 3) {
+  if (!client || connectionState !== 'ready') {
+    throw new Error('WhatsApp is not connected');
+  }
+
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const chats = await client.getChats();
+      cachedChats = chats
+        .filter((chat) => !chat.isReadOnly)
+        .map(formatChat)
+        .sort((a, b) => a.name.localeCompare(b.name));
+      return cachedChats;
+    } catch (err) {
+      lastError = err;
+      console.error(`getChats attempt ${attempt}/${retries} failed:`, err.message);
+      if (attempt < retries) {
+        await new Promise((r) => setTimeout(r, 1500 * attempt));
+      }
+    }
+  }
+
+  throw lastError || new Error('Failed to load chats');
+}
 
 const eventListeners = {
   qr: [],
@@ -43,6 +83,11 @@ async function initialize() {
     authStrategy: new LocalAuth({
       dataPath: path.join(__dirname, '..', 'data', 'whatsapp-session'),
     }),
+    webVersionCache: {
+      type: 'remote',
+      remotePath:
+        'https://raw.githubusercontent.com/wwebjs/whatsapp-web.js/main/web-version.json',
+    },
     puppeteer: {
       headless: true,
       args: [
@@ -84,6 +129,19 @@ async function initialize() {
     }
 
     emit('ready', connectedInfo);
+
+    // Load chats immediately on ready — delays here can break getChats()
+    chatsLoading = true;
+    fetchAndCacheChats()
+      .then((chats) => {
+        console.log(`Loaded ${chats.length} chats`);
+      })
+      .catch((err) => {
+        console.error('Initial chat load failed:', err.message);
+      })
+      .finally(() => {
+        chatsLoading = false;
+      });
   });
 
   client.on('disconnected', (reason) => {
@@ -109,26 +167,38 @@ async function disconnect() {
   }
   connectionState = 'disconnected';
   connectedInfo = null;
+  cachedChats = [];
   lastQr = null;
   lastQrDataUrl = null;
 }
 
-async function getChats() {
+async function getChats({ refresh = false } = {}) {
   if (!client || connectionState !== 'ready') {
     throw new Error('WhatsApp is not connected');
   }
 
-  const chats = await client.getChats();
-  return chats
-    .filter((chat) => !chat.isReadOnly)
-    .map((chat) => ({
-      id: chat.id._serialized,
-      name: chat.name || chat.id.user,
-      isGroup: chat.isGroup,
-      unreadCount: chat.unreadCount,
-      lastMessage: chat.lastMessage?.body?.slice(0, 60) || '',
-    }))
-    .sort((a, b) => a.name.localeCompare(b.name));
+  if (!refresh && cachedChats.length > 0) {
+    return cachedChats;
+  }
+
+  if (chatsLoading) {
+    await new Promise((resolve) => {
+      const check = setInterval(() => {
+        if (!chatsLoading) {
+          clearInterval(check);
+          resolve();
+        }
+      }, 200);
+    });
+    if (cachedChats.length > 0) return cachedChats;
+  }
+
+  chatsLoading = true;
+  try {
+    return await fetchAndCacheChats();
+  } finally {
+    chatsLoading = false;
+  }
 }
 
 async function sendPollToChats({

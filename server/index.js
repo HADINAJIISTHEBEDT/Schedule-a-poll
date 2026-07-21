@@ -35,12 +35,14 @@ app.post('/api/disconnect', async (_req, res) => {
   }
 });
 
-app.get('/api/chats', async (_req, res) => {
+app.get('/api/chats', async (req, res) => {
   try {
-    const chats = await whatsapp.getChats();
+    const refresh = req.query.refresh === '1';
+    const chats = await whatsapp.getChats({ refresh });
     res.json(chats);
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    console.error('GET /api/chats error:', err.message);
+    res.status(400).json({ error: err.message || 'Failed to load chats' });
   }
 });
 
