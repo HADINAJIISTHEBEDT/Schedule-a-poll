@@ -1,0 +1,10 @@
+node_modules
+data
+android-sdk
+.git
+.env
+*.db
+.wwebjs_auth
+.wwebjs_cache
+android/app/build
+android/.gradle

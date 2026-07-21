@@ -114,6 +114,30 @@ POST /api/polls
 | Poll failed to send | Check the chat still exists; reconnect WhatsApp |
 | Session expired | Disconnect and scan QR again |
 
+## Deploy on Render
+
+1. Push this repo to GitHub (branch: `main`)
+2. Go to [render.com](https://render.com) → **New** → **Blueprint**
+3. Connect your GitHub repo `HADINAJIISTHEBEDT/Schedule-a-poll`
+4. Render will read `render.yaml` and deploy automatically
+5. Open your Render URL (e.g. `https://schedule-a-poll.onrender.com`)
+6. Connect WhatsApp via QR code
+
+**Important for Render:**
+- Use the **Starter** plan or higher (WhatsApp needs Chrome/Puppeteer)
+- A **persistent disk** is configured for WhatsApp session data (`/app/data`)
+- After deploy, use your Render URL in the Android app: `https://your-app.onrender.com`
+
+### Manual Render setup (without Blueprint)
+
+| Setting | Value |
+|---------|-------|
+| Environment | Docker |
+| Build Command | (auto from Dockerfile) |
+| Start Command | `npm start` |
+| Health Check | `/api/status` |
+| Disk | Mount `/app/data` (1 GB) |
+
 ## Android APK
 
 Download the mobile app:
