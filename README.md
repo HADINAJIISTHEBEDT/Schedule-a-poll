@@ -114,6 +114,33 @@ POST /api/polls
 | Poll failed to send | Check the chat still exists; reconnect WhatsApp |
 | Session expired | Disconnect and scan QR again |
 
+## Android APK
+
+Download the mobile app:
+
+**[Download poll-scheduler.apk](https://github.com/HADINAJIISTHEBEDT/Schedule-a-poll/raw/cursor/whatsapp-poll-scheduler-7fe9/releases/poll-scheduler.apk)**
+
+Or from your running server: `http://localhost:3000/download/apk`
+
+### How to use the APK
+
+1. Install the APK on your Android phone (enable "Install from unknown sources" if asked)
+2. On your PC, run the server: `npm start`
+3. Find your PC's local IP (e.g. `192.168.1.5`)
+4. Open the app on your phone → tap **⚙️** → enter `http://YOUR_PC_IP:3000`
+5. Connect WhatsApp and schedule polls from your phone
+
+> The WhatsApp connection runs on your PC/server. The APK is the remote control UI.
+
+### Build APK yourself
+
+```bash
+npm install
+npm run build:apk
+```
+
+Output: `releases/poll-scheduler.apk`
+
 ## License
 
 MIT

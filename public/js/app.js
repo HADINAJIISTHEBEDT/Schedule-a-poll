@@ -38,6 +38,11 @@ const els = {
   pollsList: $('#pollsList'),
   refreshPollsBtn: $('#refreshPollsBtn'),
   toast: $('#toast'),
+  serverSettingsBtn: $('#serverSettingsBtn'),
+  serverOverlay: $('#serverOverlay'),
+  serverUrlInput: $('#serverUrlInput'),
+  saveServerBtn: $('#saveServerBtn'),
+  closeServerBtn: $('#closeServerBtn'),
 };
 
 let searchTimer = null;
@@ -228,7 +233,7 @@ function updateConnectionUI({ state: connState, qr, connectedInfo }) {
 
 async function fetchStatus() {
   try {
-    const res = await fetch('/api/status');
+    const res = await apiFetch('/api/status');
     const data = await res.json();
     updateConnectionUI(data);
   } catch {
@@ -237,10 +242,10 @@ async function fetchStatus() {
 }
 
 async function connect() {
-  const status = await fetch('/api/status').then((r) => r.json());
+  const status = await apiFetch('/api/status').then((r) => r.json());
 
   if (status.state === 'ready') {
-    await fetch('/api/disconnect', { method: 'POST' });
+    await apiFetch('/api/disconnect', { method: 'POST' });
     state.chats = [];
     state.selectedChats.clear();
     state.chatsLoaded = false;
@@ -251,14 +256,14 @@ async function connect() {
     return fetchStatus();
   }
 
-  await fetch('/api/connect', { method: 'POST' });
+  await apiFetch('/api/connect', { method: 'POST' });
   showToast('Connecting — scan the QR code');
   pollStatus();
 }
 
 function pollStatus() {
   const interval = setInterval(async () => {
-    const res = await fetch('/api/status');
+    const res = await apiFetch('/api/status');
     const data = await res.json();
     updateConnectionUI(data);
     if (data.state === 'ready' || data.state === 'disconnected' || data.state === 'auth_failure') {
@@ -284,12 +289,12 @@ async function loadChats(refresh = false) {
     if (refresh) params.set('refresh', '1');
     if (refresh && needsContacts()) params.set('contacts', '1');
 
-    const res = await fetch(`/api/chats?${params}`);
+    const res = await apiFetch(`/api/chats?${params}`);
     if (!res.ok) throw new Error((await res.json()).error || 'Failed to load chats');
 
     state.chats = await res.json();
     state.chatsLoaded = true;
-    state.contactsLoaded = needsContacts();
+    state.contactsLoaded = refresh && needsContacts();
     chatCounts = {
       groups: state.chats.filter((c) => c.isGroup).length,
       contacts: state.chats.filter((c) => !c.isGroup).length,
@@ -307,7 +312,7 @@ async function ensureContactsLoaded() {
   if (state.contactsLoaded || state.loadingChats) return;
   state.loadingChats = true;
   try {
-    const res = await fetch('/api/chats?contacts=1');
+    const res = await apiFetch('/api/chats?contacts=1');
     if (!res.ok) throw new Error((await res.json()).error || 'Failed to load contacts');
     state.chats = await res.json();
     state.contactsLoaded = true;
@@ -325,7 +330,7 @@ async function ensureContactsLoaded() {
 
 async function loadPolls() {
   try {
-    const res = await fetch('/api/polls');
+    const res = await apiFetch('/api/polls');
     const polls = await res.json();
     renderPolls(polls);
   } catch {
@@ -413,7 +418,7 @@ async function submitPoll(sendNow = false) {
   };
 
   try {
-    const res = await fetch('/api/polls', {
+    const res = await apiFetch('/api/polls', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -433,7 +438,7 @@ async function submitPoll(sendNow = false) {
 
 async function sendPollNow(id) {
   try {
-    const res = await fetch(`/api/polls/${id}/send-now`, { method: 'POST' });
+    const res = await apiFetch(`/api/polls/${id}/send-now`, { method: 'POST' });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error);
     showToast('Poll sent!');
@@ -445,7 +450,7 @@ async function sendPollNow(id) {
 
 async function deletePoll(id) {
   try {
-    const res = await fetch(`/api/polls/${id}`, { method: 'DELETE' });
+    const res = await apiFetch(`/api/polls/${id}`, { method: 'DELETE' });
     if (!res.ok) throw new Error((await res.json()).error);
     showToast('Poll deleted');
     loadPolls();
@@ -516,10 +521,39 @@ els.scheduleBtn.addEventListener('click', () => submitPoll(false));
 els.sendNowBtn.addEventListener('click', () => submitPoll(true));
 els.refreshPollsBtn.addEventListener('click', loadPolls);
 
+function openServerSettings() {
+  els.serverUrlInput.value = getApiBase() || 'http://';
+  els.serverOverlay.classList.remove('hidden');
+}
+
+function closeServerSettings() {
+  els.serverOverlay.classList.add('hidden');
+}
+
+function saveServerSettings() {
+  const url = els.serverUrlInput.value.trim();
+  if (!url || !/^https?:\/\//i.test(url)) {
+    return showToast('Enter a valid URL like http://192.168.1.5:3000', 'error');
+  }
+  setApiBase(url);
+  closeServerSettings();
+  showToast('Server saved');
+  fetchStatus();
+  loadPolls();
+}
+
+els.serverSettingsBtn.addEventListener('click', openServerSettings);
+els.saveServerBtn.addEventListener('click', saveServerSettings);
+els.closeServerBtn.addEventListener('click', closeServerSettings);
+
 renderOptions();
 setDefaultSchedule();
-fetchStatus();
-loadPolls();
+if (isCapacitorApp() && !getApiBase()) {
+  openServerSettings();
+} else {
+  fetchStatus();
+  loadPolls();
+}
 
 setInterval(() => {
   if (document.hidden) return;

@@ -526,7 +526,26 @@ input:focus {
   transition: opacity 0.3s;
 }
 
-.toast.hidden {
+.hint-block {
+  font-size: 0.875rem;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+}
+
+.hint-block code {
+  color: var(--accent);
+}
+
+#serverUrlInput {
+  width: 100%;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: var(--text);
+  font: inherit;
+}
+
   opacity: 0;
   pointer-events: none;
 }

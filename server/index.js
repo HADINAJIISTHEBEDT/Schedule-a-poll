@@ -1,5 +1,6 @@
 const express = require('express');
 const path = require('path');
+const fs = require('fs');
 const db = require('./database');
 const whatsapp = require('./whatsapp');
 const scheduler = require('./scheduler');
@@ -9,6 +10,22 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '..', 'public')));
+
+const apkPath = path.join(__dirname, '..', 'releases', 'poll-scheduler.apk');
+
+app.get('/download/apk', (_req, res) => {
+  if (!fs.existsSync(apkPath)) {
+    return res.status(404).json({ error: 'APK not built yet. Run: npm run build:apk' });
+  }
+  res.download(apkPath, 'poll-scheduler.apk');
+});
+
+app.get('/api/download', (_req, res) => {
+  if (!fs.existsSync(apkPath)) {
+    return res.json({ available: false, url: null });
+  }
+  res.json({ available: true, url: '/download/apk' });
+});
 
 app.get('/api/status', (_req, res) => {
   res.json(whatsapp.getStatus());
