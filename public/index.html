@@ -66,10 +66,16 @@
 
         <div class="form-group">
           <label>Select Chats</label>
+          <div class="chat-filters">
+            <button type="button" class="chat-filter active" data-filter="all">All</button>
+            <button type="button" class="chat-filter" data-filter="groups">Groups</button>
+            <button type="button" class="chat-filter" data-filter="contacts">Contacts</button>
+          </div>
           <div class="chat-search">
-            <input type="text" id="chatSearch" placeholder="Search chats..." />
+            <input type="text" id="chatSearch" placeholder="Search groups or contacts..." />
             <button type="button" class="btn btn-ghost btn-sm" id="refreshChatsBtn">Refresh</button>
           </div>
+          <p class="chat-summary" id="chatSummary"></p>
           <div class="chat-list" id="chatList">
             <p class="placeholder">Connect WhatsApp to load your chats</p>
           </div>

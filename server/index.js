@@ -67,10 +67,16 @@ app.post('/api/polls', (req, res) => {
     return res.status(400).json({ error: 'Select at least one chat' });
   }
 
-  const scheduleTime = sendNow ? new Date().toISOString().slice(0, 19).replace('T', ' ') : scheduledAt;
+  const scheduleTime = sendNow
+    ? new Date().toISOString()
+    : scheduledAt;
 
   if (!scheduleTime) {
     return res.status(400).json({ error: 'Schedule time is required' });
+  }
+
+  if (!sendNow && Number.isNaN(new Date(scheduleTime).getTime())) {
+    return res.status(400).json({ error: 'Invalid schedule time' });
   }
 
   const id = db.createPoll({

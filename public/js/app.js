@@ -4,6 +4,7 @@ const state = {
   chats: [],
   selectedChats: new Set(),
   options: ['', ''],
+  chatFilter: 'all',
 };
 
 const els = {
@@ -19,6 +20,7 @@ const els = {
   allowMultiple: $('#allowMultiple'),
   chatSearch: $('#chatSearch'),
   chatList: $('#chatList'),
+  chatSummary: $('#chatSummary'),
   refreshChatsBtn: $('#refreshChatsBtn'),
   selectedCount: $('#selectedCount'),
   scheduledAt: $('#scheduledAt'),
@@ -71,25 +73,48 @@ function escapeHtml(str) {
 
 function renderChats(filter = '') {
   const term = filter.toLowerCase();
-  const filtered = state.chats.filter((c) => c.name.toLowerCase().includes(term));
+  let filtered = state.chats.filter((c) => c.name.toLowerCase().includes(term));
+
+  if (state.chatFilter === 'groups') {
+    filtered = filtered.filter((c) => c.isGroup);
+  } else if (state.chatFilter === 'contacts') {
+    filtered = filtered.filter((c) => !c.isGroup);
+  }
+
+  const groups = filtered.filter((c) => c.isGroup);
+  const contacts = filtered.filter((c) => !c.isGroup);
+  updateChatSummary(groups.length, contacts.length);
 
   if (filtered.length === 0) {
     els.chatList.innerHTML = `<p class="placeholder">${state.chats.length ? 'No chats match your search' : 'Connect WhatsApp to load your chats'}</p>`;
     return;
   }
 
-  els.chatList.innerHTML = filtered
-    .map(
-      (chat) => `
+  const renderItem = (chat) => `
     <label class="chat-item ${state.selectedChats.has(chat.id) ? 'selected' : ''}" data-id="${chat.id}">
       <input type="checkbox" ${state.selectedChats.has(chat.id) ? 'checked' : ''} />
       <div>
         <div class="chat-name">${escapeHtml(chat.name)}</div>
         <div class="chat-meta">${chat.isGroup ? 'Group' : 'Contact'}</div>
       </div>
-    </label>`
-    )
-    .join('');
+    </label>`;
+
+  let html = '';
+
+  if (state.chatFilter === 'all') {
+    if (groups.length) {
+      html += `<div class="chat-section-title">Groups (${groups.length})</div>`;
+      html += groups.map(renderItem).join('');
+    }
+    if (contacts.length) {
+      html += `<div class="chat-section-title">Contacts (${contacts.length})</div>`;
+      html += contacts.map(renderItem).join('');
+    }
+  } else {
+    html = filtered.map(renderItem).join('');
+  }
+
+  els.chatList.innerHTML = html;
 
   els.chatList.querySelectorAll('.chat-item').forEach((item) => {
     item.addEventListener('click', (e) => {
@@ -108,6 +133,12 @@ function renderChats(filter = '') {
   });
 
   updateSelectedCount();
+}
+
+function updateChatSummary(groupCount, contactCount) {
+  const totalGroups = state.chats.filter((c) => c.isGroup).length;
+  const totalContacts = state.chats.filter((c) => !c.isGroup).length;
+  els.chatSummary.textContent = `${totalGroups} groups · ${totalContacts} contacts available`;
 }
 
 function toggleChat(id, selected) {
@@ -270,7 +301,8 @@ function renderPolls(polls) {
 
 function formatDate(str) {
   if (!str) return '';
-  const d = new Date(str.includes('T') ? str : str.replace(' ', 'T') + 'Z');
+  const d = new Date(str);
+  if (Number.isNaN(d.getTime())) return str;
   return d.toLocaleString();
 }
 
@@ -286,11 +318,15 @@ async function submitPoll(sendNow = false) {
   if (!chatIds.length) return showToast('Select at least one chat', 'error');
   if (delayMin > delayMax) return showToast('Min delay must be ≤ max delay', 'error');
 
-  const scheduledAt = sendNow
-    ? null
-    : els.scheduledAt.value.replace('T', ' ') + ':00';
+  const scheduledAt = sendNow ? null : new Date(els.scheduledAt.value).toISOString();
 
-  if (!sendNow && !scheduledAt) return showToast('Pick a schedule time', 'error');
+  if (!sendNow && (!scheduledAt || Number.isNaN(new Date(scheduledAt).getTime()))) {
+    return showToast('Pick a valid schedule time', 'error');
+  }
+
+  if (!sendNow && new Date(scheduledAt) <= new Date()) {
+    return showToast('Schedule time must be in the future', 'error');
+  }
 
   const body = {
     question,
@@ -353,6 +389,14 @@ els.addOptionBtn.addEventListener('click', () => {
   renderOptions();
 });
 els.chatSearch.addEventListener('input', (e) => renderChats(e.target.value));
+document.querySelectorAll('.chat-filter').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.chat-filter').forEach((b) => b.classList.remove('active'));
+    btn.classList.add('active');
+    state.chatFilter = btn.dataset.filter;
+    renderChats(els.chatSearch.value);
+  });
+});
 els.refreshChatsBtn.addEventListener('click', () => loadChats(true));
 els.scheduleBtn.addEventListener('click', () => submitPoll(false));
 els.sendNowBtn.addEventListener('click', () => submitPoll(true));

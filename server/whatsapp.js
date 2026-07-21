@@ -36,8 +36,16 @@ async function fetchChatsDirect() {
   const result = await client.pupPage.evaluate(() => {
     const collections = window.require('WAWebCollections');
     const chats = collections.Chat.getModelsArray();
+    const seen = new Set();
+    const items = [];
 
-    return chats.map((chat) => {
+    const addItem = (id, name, isGroup, isReadOnly, unreadCount, lastMessage) => {
+      if (!id || seen.has(id) || isReadOnly) return;
+      seen.add(id);
+      items.push({ id, name, isGroup, isReadOnly, unreadCount, lastMessage });
+    };
+
+    for (const chat of chats) {
       const id = chat.id?._serialized || String(chat.id);
       const name =
         chat.formattedTitle ||
@@ -47,7 +55,7 @@ async function fetchChatsDirect() {
         (id.includes('@') ? id.split('@')[0] : id) ||
         'Unknown';
 
-      const isGroup = Boolean(chat.groupMetadata);
+      const isGroup = Boolean(chat.groupMetadata) || id.endsWith('@g.us');
       const isReadOnly = Boolean(chat.groupMetadata?.announce);
       const unreadCount = chat.unreadCount || 0;
 
@@ -61,14 +69,33 @@ async function fetchChatsDirect() {
         // ignore missing last message
       }
 
-      return { id, name, isGroup, isReadOnly, unreadCount, lastMessage };
-    });
+      addItem(id, name, isGroup, isReadOnly, unreadCount, lastMessage);
+    }
+
+    const contacts = collections.Contact?.getModelsArray?.() || [];
+    for (const contact of contacts) {
+      const id = contact.id?._serialized || String(contact.id);
+      if (!id || id.endsWith('@g.us') || contact.isMe) continue;
+
+      const name =
+        contact.pushname ||
+        contact.name ||
+        contact.shortName ||
+        (id.includes('@') ? id.split('@')[0] : id) ||
+        'Unknown';
+
+      addItem(id, name, false, false, 0, '');
+    }
+
+    return items;
   });
 
   return result
-    .filter((chat) => chat.id && !chat.isReadOnly)
     .map(formatDirectChat)
-    .sort((a, b) => a.name.localeCompare(b.name));
+    .sort((a, b) => {
+      if (a.isGroup !== b.isGroup) return a.isGroup ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
 }
 
 async function fetchAndCacheChats(retries = 3) {
