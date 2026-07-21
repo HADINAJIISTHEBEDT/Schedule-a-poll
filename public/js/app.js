@@ -166,6 +166,9 @@ function updateConnectionUI({ state: connState, qr, connectedInfo }) {
     els.qrOverlay.classList.add('hidden');
     els.connectBtn.textContent = 'Disconnect';
     loadChats();
+    setTimeout(() => {
+      if (state.chats.length === 0) loadChats(true);
+    }, 4000);
   } else {
     els.connectBtn.textContent = connState === 'disconnected' ? 'Connect WhatsApp' : 'Connecting...';
   }
@@ -199,14 +202,20 @@ function pollStatus() {
   }, 2000);
 }
 
-async function loadChats() {
+async function loadChats(refresh = false) {
+  els.chatList.innerHTML = '<p class="placeholder">Loading chats...</p>';
   try {
-    const res = await fetch('/api/chats');
-    if (!res.ok) throw new Error((await res.json()).error);
+    const url = refresh ? '/api/chats?refresh=1' : '/api/chats';
+    const res = await fetch(url);
+    if (!res.ok) throw new Error((await res.json()).error || 'Failed to load chats');
     state.chats = await res.json();
     renderChats(els.chatSearch.value);
+    if (state.chats.length === 0) {
+      showToast('No chats found — try Refresh', 'error');
+    }
   } catch (err) {
-    showToast(err.message, 'error');
+    els.chatList.innerHTML = `<p class="placeholder">Could not load chats. Click Refresh to try again.</p>`;
+    showToast(err.message || 'Failed to load chats', 'error');
   }
 }
 
@@ -344,7 +353,7 @@ els.addOptionBtn.addEventListener('click', () => {
   renderOptions();
 });
 els.chatSearch.addEventListener('input', (e) => renderChats(e.target.value));
-els.refreshChatsBtn.addEventListener('click', loadChats);
+els.refreshChatsBtn.addEventListener('click', () => loadChats(true));
 els.scheduleBtn.addEventListener('click', () => submitPoll(false));
 els.sendNowBtn.addEventListener('click', () => submitPoll(true));
 els.refreshPollsBtn.addEventListener('click', loadPolls);
