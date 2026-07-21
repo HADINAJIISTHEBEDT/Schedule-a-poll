@@ -472,6 +472,7 @@ input:focus {
 }
 
 .qr-overlay.hidden { display: none; }
+.hidden { display: none !important; }
 
 .qr-card {
   background: var(--surface);

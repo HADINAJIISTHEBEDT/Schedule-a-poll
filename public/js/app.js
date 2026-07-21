@@ -110,7 +110,10 @@ function renderChats(filter = '') {
   updateChatSummary();
 
   if (filtered.length === 0) {
-    els.chatList.innerHTML = `<p class="placeholder">${state.chats.length ? 'No chats match your search' : 'Connect WhatsApp, then tap Load chats'}</p>`;
+    const emptyMessage = state.connectionState === 'ready'
+      ? 'No chats loaded yet. Tap Refresh above.'
+      : 'Connect WhatsApp to load your chats';
+    els.chatList.innerHTML = `<p class="placeholder">${state.chats.length ? 'No chats match your search' : emptyMessage}</p>`;
     return;
   }
 
@@ -552,6 +555,10 @@ els.serverSettingsBtn.addEventListener('click', openServerSettings);
 els.saveServerBtn.addEventListener('click', saveServerSettings);
 els.closeServerBtn.addEventListener('click', closeServerSettings);
 
+if (!isCapacitorApp()) {
+  els.serverSettingsBtn.classList.add('hidden');
+}
+
 renderOptions();
 setDefaultSchedule();
 if (isCapacitorApp() && !getApiBase()) {
@@ -564,11 +571,17 @@ if (isCapacitorApp() && !getApiBase()) {
 setInterval(() => {
   if (document.hidden) return;
   fetchStatus();
+  if (state.connectionState === 'ready' && !state.chats.length && !state.loadingChats) {
+    loadChats(true);
+  }
 }, 30000);
 
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) {
     fetchStatus();
     loadPolls();
+    if (state.connectionState === 'ready' && !state.chats.length) {
+      loadChats(true);
+    }
   }
 });
