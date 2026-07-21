@@ -11,7 +11,7 @@
     "build:apk": "node scripts/build-apk.js"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "dependencies": {
     "better-sqlite3": "^11.8.1",
