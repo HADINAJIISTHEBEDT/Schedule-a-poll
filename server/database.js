@@ -35,7 +35,7 @@ const insertPoll = db.prepare(`
 
 const getPendingPolls = db.prepare(`
   SELECT * FROM scheduled_polls
-  WHERE status = 'pending' AND scheduled_at <= datetime('now')
+  WHERE status = 'pending'
   ORDER BY scheduled_at ASC
 `);
 
@@ -69,7 +69,10 @@ module.exports = {
   },
 
   getPendingPolls() {
-    return getPendingPolls.all();
+    const now = Date.now();
+    return getPendingPolls
+      .all()
+      .filter((row) => new Date(row.scheduled_at).getTime() <= now);
   },
 
   getAllPolls() {
