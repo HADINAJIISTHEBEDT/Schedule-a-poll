@@ -218,7 +218,7 @@ function updateConnectionUI({ state: connState, qr, connectedInfo }) {
     els.qrOverlay.classList.add('hidden');
     els.connectBtn.textContent = 'Disconnect';
     if (!wasReady && !state.chatsLoaded && !state.loadingChats) {
-      loadChats(false);
+      loadChats(true);
     }
   } else {
     els.connectBtn.textContent = connState === 'disconnected' ? 'Connect WhatsApp' : 'Connecting...';
@@ -269,7 +269,7 @@ function pollStatus() {
     if (data.state === 'ready' || data.state === 'disconnected' || data.state === 'auth_failure') {
       clearInterval(interval);
     }
-  }, 3000);
+  }, 1000);
 }
 
 function needsContacts() {
@@ -287,19 +287,25 @@ async function loadChats(refresh = false) {
   try {
     const params = new URLSearchParams();
     if (refresh) params.set('refresh', '1');
-    if (refresh && needsContacts()) params.set('contacts', '1');
+    if (needsContacts()) params.set('contacts', '1');
 
     const res = await apiFetch(`/api/chats?${params}`);
     if (!res.ok) throw new Error((await res.json()).error || 'Failed to load chats');
 
     state.chats = await res.json();
-    state.chatsLoaded = true;
-    state.contactsLoaded = refresh && needsContacts();
+    state.chatsLoaded = state.chats.length > 0;
+    state.contactsLoaded = needsContacts() && state.chats.some((c) => !c.isGroup);
     chatCounts = {
       groups: state.chats.filter((c) => c.isGroup).length,
       contacts: state.chats.filter((c) => !c.isGroup).length,
     };
     renderChats(els.chatSearch.value);
+
+    if (!state.chats.length && state.connectionState === 'ready' && !refresh) {
+      state.loadingChats = false;
+      await new Promise((r) => setTimeout(r, 2000));
+      return loadChats(true);
+    }
   } catch (err) {
     els.chatList.innerHTML = '<p class="placeholder">Could not load chats. Tap Refresh to try again.</p>';
     showToast(err.message || 'Failed to load chats', 'error');

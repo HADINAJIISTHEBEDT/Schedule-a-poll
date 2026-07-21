@@ -127,23 +127,27 @@ async function fetchAndCacheChats({ refresh = false, includeContacts = false } =
 
   let lastError = null;
 
-  for (let attempt = 1; attempt <= 2; attempt++) {
+  for (let attempt = 1; attempt <= 4; attempt++) {
     try {
-      cachedChats = await fetchChatsDirect({ includeContacts: false });
-      chatsCacheTime = Date.now();
+      const chats = await fetchChatsDirect({ includeContacts: false });
+      if (chats.length > 0) {
+        cachedChats = chats;
+        chatsCacheTime = Date.now();
 
-      if (includeContacts) {
-        cachedContacts = (await fetchChatsDirect({ includeContacts: true })).filter((c) => !c.isGroup);
-        return mergeChatLists(cachedChats, cachedContacts);
+        if (includeContacts) {
+          cachedContacts = (await fetchChatsDirect({ includeContacts: true })).filter((c) => !c.isGroup);
+          return mergeChatLists(cachedChats, cachedContacts);
+        }
+
+        return cachedChats;
       }
-
-      return cachedChats;
     } catch (err) {
       lastError = err;
-      console.error(`Chat fetch attempt ${attempt}/2 failed:`, err.message);
-      if (attempt < 2) {
-        await new Promise((r) => setTimeout(r, 1000));
-      }
+      console.error(`Chat fetch attempt ${attempt}/4 failed:`, err.message);
+    }
+
+    if (attempt < 4) {
+      await new Promise((r) => setTimeout(r, 1500 * attempt));
     }
   }
 
@@ -243,6 +247,19 @@ async function initialize() {
     }
 
     emit('ready', connectedInfo);
+
+    // Load chats immediately on ready — waiting too long can return an empty list
+    chatsLoading = true;
+    fetchAndCacheChats({ refresh: true, includeContacts: true })
+      .then((chats) => {
+        console.log(`Preloaded ${chats.length} chats`);
+      })
+      .catch((err) => {
+        console.error('Initial chat preload failed:', err.message);
+      })
+      .finally(() => {
+        chatsLoading = false;
+      });
   });
 
   client.on('disconnected', (reason) => {
@@ -281,7 +298,8 @@ async function getChats({ refresh = false, includeContacts = false } = {}) {
   }
 
   if (!refresh && cachedChats.length > 0) {
-    return cachedChats;
+    if (!includeContacts) return cachedChats;
+    if (cachedContacts) return mergeChatLists(cachedChats, cachedContacts);
   }
 
   if (chatsLoading) {
