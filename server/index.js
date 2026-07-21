@@ -6,7 +6,16 @@ const whatsapp = require('./whatsapp');
 const scheduler = require('./scheduler');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = Number(process.env.PORT) || 3000;
+const HOST = process.env.HOST || '0.0.0.0';
+
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught exception:', err);
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled rejection:', reason);
+});
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '..', 'public')));
@@ -145,10 +154,7 @@ app.post('/api/polls/:id/send-now', async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`Poll Scheduler running at http://localhost:${PORT}`);
+app.listen(PORT, HOST, () => {
+  console.log(`Poll Scheduler running at http://${HOST}:${PORT}`);
   scheduler.start();
-  whatsapp.initialize().catch((err) => {
-    console.error('WhatsApp init error:', err.message);
-  });
 });

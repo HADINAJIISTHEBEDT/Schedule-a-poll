@@ -210,10 +210,14 @@ async function initialize() {
   });
 
   client.on('qr', async (qr) => {
-    connectionState = 'qr';
-    lastQr = qr;
-    lastQrDataUrl = await qrcode.toDataURL(qr);
-    emit('qr', lastQrDataUrl);
+    try {
+      connectionState = 'qr';
+      lastQr = qr;
+      lastQrDataUrl = await qrcode.toDataURL(qr);
+      emit('qr', lastQrDataUrl);
+    } catch (err) {
+      console.error('QR handler error:', err.message);
+    }
   });
 
   client.on('authenticated', () => {

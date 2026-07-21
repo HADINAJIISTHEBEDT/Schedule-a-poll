@@ -3,11 +3,21 @@ const path = require('path');
 const fs = require('fs');
 
 const dataDir = path.join(__dirname, '..', 'data');
-if (!fs.existsSync(dataDir)) {
+
+try {
   fs.mkdirSync(dataDir, { recursive: true });
+} catch (err) {
+  console.error(`Failed to create data directory at ${dataDir}:`, err.message);
+  throw err;
 }
 
-const db = new Database(path.join(dataDir, 'polls.db'));
+let db;
+try {
+  db = new Database(path.join(dataDir, 'polls.db'));
+} catch (err) {
+  console.error(`Failed to open database at ${dataDir}/polls.db:`, err.message);
+  throw err;
+}
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS scheduled_polls (
