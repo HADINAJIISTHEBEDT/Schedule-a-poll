@@ -9,7 +9,10 @@ let lastQr = null;
 let lastQrDataUrl = null;
 let connectedInfo = null;
 let cachedChats = [];
+let cachedContacts = null;
 let chatsLoading = false;
+let chatsCacheTime = 0;
+const CHATS_CACHE_TTL = 5 * 60 * 1000;
 
 function formatChat(chat) {
   const name = chat.name || chat.id?.user || chat.id?._serialized || 'Unknown chat';
@@ -32,17 +35,17 @@ function formatDirectChat(chat) {
   };
 }
 
-async function fetchChatsDirect() {
-  const result = await client.pupPage.evaluate(() => {
+async function fetchChatsDirect({ includeContacts = false } = {}) {
+  const result = await client.pupPage.evaluate((withContacts) => {
     const collections = window.require('WAWebCollections');
     const chats = collections.Chat.getModelsArray();
     const seen = new Set();
     const items = [];
 
-    const addItem = (id, name, isGroup, isReadOnly, unreadCount, lastMessage) => {
+    const addItem = (id, name, isGroup, isReadOnly) => {
       if (!id || seen.has(id) || isReadOnly) return;
       seen.add(id);
-      items.push({ id, name, isGroup, isReadOnly, unreadCount, lastMessage });
+      items.push({ id, name, isGroup });
     };
 
     for (const chat of chats) {
@@ -57,86 +60,97 @@ async function fetchChatsDirect() {
 
       const isGroup = Boolean(chat.groupMetadata) || id.endsWith('@g.us');
       const isReadOnly = Boolean(chat.groupMetadata?.announce);
-      const unreadCount = chat.unreadCount || 0;
-
-      let lastMessage = '';
-      try {
-        if (chat.lastReceivedKey?._serialized) {
-          const msg = collections.Msg.get(chat.lastReceivedKey._serialized);
-          lastMessage = msg?.body?.slice(0, 60) || '';
-        }
-      } catch (_) {
-        // ignore missing last message
-      }
-
-      addItem(id, name, isGroup, isReadOnly, unreadCount, lastMessage);
+      addItem(id, name, isGroup, isReadOnly);
     }
 
-    const contacts = collections.Contact?.getModelsArray?.() || [];
-    for (const contact of contacts) {
-      const id = contact.id?._serialized || String(contact.id);
-      if (!id || id.endsWith('@g.us') || contact.isMe) continue;
+    if (withContacts) {
+      const contacts = collections.Contact?.getModelsArray?.() || [];
+      for (const contact of contacts) {
+        const id = contact.id?._serialized || String(contact.id);
+        if (!id || id.endsWith('@g.us') || contact.isMe) continue;
 
-      const name =
-        contact.pushname ||
-        contact.name ||
-        contact.shortName ||
-        (id.includes('@') ? id.split('@')[0] : id) ||
-        'Unknown';
+        const name =
+          contact.pushname ||
+          contact.name ||
+          contact.shortName ||
+          (id.includes('@') ? id.split('@')[0] : id) ||
+          'Unknown';
 
-      addItem(id, name, false, false, 0, '');
+        addItem(id, name, false, false);
+      }
     }
 
     return items;
-  });
+  }, includeContacts);
 
   return result
-    .map(formatDirectChat)
+    .map((chat) => ({
+      id: chat.id,
+      name: chat.name || 'Unknown chat',
+      isGroup: Boolean(chat.isGroup),
+    }))
     .sort((a, b) => {
       if (a.isGroup !== b.isGroup) return a.isGroup ? -1 : 1;
       return a.name.localeCompare(b.name);
     });
 }
 
-async function fetchAndCacheChats(retries = 3) {
+function mergeChatLists(base, extra) {
+  const seen = new Set(base.map((c) => c.id));
+  const merged = [...base];
+  for (const item of extra) {
+    if (!seen.has(item.id)) {
+      seen.add(item.id);
+      merged.push(item);
+    }
+  }
+  return merged.sort((a, b) => {
+    if (a.isGroup !== b.isGroup) return a.isGroup ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+}
+
+async function fetchAndCacheChats({ refresh = false, includeContacts = false } = {}) {
   if (!client || connectionState !== 'ready') {
     throw new Error('WhatsApp is not connected');
   }
 
+  const cacheValid =
+    !refresh &&
+    cachedChats.length > 0 &&
+    Date.now() - chatsCacheTime < CHATS_CACHE_TTL &&
+    (!includeContacts || cachedContacts);
+
+  if (cacheValid) {
+    return includeContacts ? mergeChatLists(cachedChats, cachedContacts) : cachedChats;
+  }
+
   let lastError = null;
 
-  for (let attempt = 1; attempt <= retries; attempt++) {
+  for (let attempt = 1; attempt <= 2; attempt++) {
     try {
-      cachedChats = await fetchChatsDirect();
-      if (cachedChats.length > 0) {
-        return cachedChats;
+      cachedChats = await fetchChatsDirect({ includeContacts: false });
+      chatsCacheTime = Date.now();
+
+      if (includeContacts) {
+        cachedContacts = (await fetchChatsDirect({ includeContacts: true })).filter((c) => !c.isGroup);
+        return mergeChatLists(cachedChats, cachedContacts);
       }
+
+      return cachedChats;
     } catch (err) {
       lastError = err;
-      console.error(`Direct chat fetch attempt ${attempt}/${retries} failed:`, err.message);
-    }
-
-    try {
-      const chats = await client.getChats();
-      cachedChats = chats
-        .filter((chat) => !chat.isReadOnly)
-        .map(formatChat)
-        .sort((a, b) => a.name.localeCompare(b.name));
-      if (cachedChats.length > 0) {
-        return cachedChats;
+      console.error(`Chat fetch attempt ${attempt}/2 failed:`, err.message);
+      if (attempt < 2) {
+        await new Promise((r) => setTimeout(r, 1000));
       }
-    } catch (err) {
-      lastError = err;
-      console.error(`getChats attempt ${attempt}/${retries} failed:`, err.message);
-    }
-
-    if (attempt < retries) {
-      await new Promise((r) => setTimeout(r, 1500 * attempt));
     }
   }
 
   if (cachedChats.length > 0) {
-    return cachedChats;
+    return includeContacts && cachedContacts
+      ? mergeChatLists(cachedChats, cachedContacts)
+      : cachedChats;
   }
 
   throw lastError || new Error('Failed to load chats. Try clicking Refresh.');
@@ -222,19 +236,6 @@ async function initialize() {
     }
 
     emit('ready', connectedInfo);
-
-    // Load chats immediately on ready — delays here can break getChats()
-    chatsLoading = true;
-    fetchAndCacheChats()
-      .then((chats) => {
-        console.log(`Loaded ${chats.length} chats`);
-      })
-      .catch((err) => {
-        console.error('Initial chat load failed:', err.message);
-      })
-      .finally(() => {
-        chatsLoading = false;
-      });
   });
 
   client.on('disconnected', (reason) => {
@@ -261,11 +262,13 @@ async function disconnect() {
   connectionState = 'disconnected';
   connectedInfo = null;
   cachedChats = [];
+  cachedContacts = null;
+  chatsCacheTime = 0;
   lastQr = null;
   lastQrDataUrl = null;
 }
 
-async function getChats({ refresh = false } = {}) {
+async function getChats({ refresh = false, includeContacts = false } = {}) {
   if (!client || connectionState !== 'ready') {
     throw new Error('WhatsApp is not connected');
   }
@@ -288,7 +291,7 @@ async function getChats({ refresh = false } = {}) {
 
   chatsLoading = true;
   try {
-    return await fetchAndCacheChats();
+    return await fetchAndCacheChats({ refresh, includeContacts });
   } finally {
     chatsLoading = false;
   }

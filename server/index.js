@@ -38,7 +38,8 @@ app.post('/api/disconnect', async (_req, res) => {
 app.get('/api/chats', async (req, res) => {
   try {
     const refresh = req.query.refresh === '1';
-    const chats = await whatsapp.getChats({ refresh });
+    const includeContacts = req.query.contacts === '1';
+    const chats = await whatsapp.getChats({ refresh, includeContacts });
     res.json(chats);
   } catch (err) {
     console.error('GET /api/chats error:', err.message);

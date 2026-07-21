@@ -1,10 +1,17 @@
 const $ = (sel) => document.querySelector(sel);
 
+const PAGE_SIZE = 40;
+
 const state = {
   chats: [],
   selectedChats: new Set(),
   options: ['', ''],
   chatFilter: 'all',
+  visibleCount: PAGE_SIZE,
+  contactsLoaded: false,
+  chatsLoaded: false,
+  connectionState: 'disconnected',
+  loadingChats: false,
 };
 
 const els = {
@@ -32,6 +39,9 @@ const els = {
   refreshPollsBtn: $('#refreshPollsBtn'),
   toast: $('#toast'),
 };
+
+let searchTimer = null;
+let chatCounts = { groups: 0, contacts: 0 };
 
 function showToast(message, type = 'success') {
   els.toast.textContent = message;
@@ -71,9 +81,13 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
-function renderChats(filter = '') {
-  const term = filter.toLowerCase();
-  let filtered = state.chats.filter((c) => c.name.toLowerCase().includes(term));
+function getFilteredChats(term = '') {
+  const search = term.toLowerCase();
+  let filtered = state.chats;
+
+  if (search) {
+    filtered = filtered.filter((c) => c.name.toLowerCase().includes(search));
+  }
 
   if (state.chatFilter === 'groups') {
     filtered = filtered.filter((c) => c.isGroup);
@@ -81,12 +95,17 @@ function renderChats(filter = '') {
     filtered = filtered.filter((c) => !c.isGroup);
   }
 
+  return filtered;
+}
+
+function renderChats(filter = '') {
+  const filtered = getFilteredChats(filter);
   const groups = filtered.filter((c) => c.isGroup);
   const contacts = filtered.filter((c) => !c.isGroup);
-  updateChatSummary(groups.length, contacts.length);
+  updateChatSummary();
 
   if (filtered.length === 0) {
-    els.chatList.innerHTML = `<p class="placeholder">${state.chats.length ? 'No chats match your search' : 'Connect WhatsApp to load your chats'}</p>`;
+    els.chatList.innerHTML = `<p class="placeholder">${state.chats.length ? 'No chats match your search' : 'Connect WhatsApp, then tap Load chats'}</p>`;
     return;
   }
 
@@ -99,52 +118,57 @@ function renderChats(filter = '') {
       </div>
     </label>`;
 
+  let list = [];
+  if (state.chatFilter === 'all') {
+    list = [...groups, ...contacts];
+  } else {
+    list = filtered;
+  }
+
+  const visible = list.slice(0, state.visibleCount);
   let html = '';
 
-  if (state.chatFilter === 'all') {
-    if (groups.length) {
+  if (state.chatFilter === 'all' && !filter) {
+    const visibleGroups = visible.filter((c) => c.isGroup);
+    const visibleContacts = visible.filter((c) => !c.isGroup);
+    if (visibleGroups.length) {
       html += `<div class="chat-section-title">Groups (${groups.length})</div>`;
-      html += groups.map(renderItem).join('');
+      html += visibleGroups.map(renderItem).join('');
     }
-    if (contacts.length) {
+    if (visibleContacts.length) {
       html += `<div class="chat-section-title">Contacts (${contacts.length})</div>`;
-      html += contacts.map(renderItem).join('');
+      html += visibleContacts.map(renderItem).join('');
     }
   } else {
-    html = filtered.map(renderItem).join('');
+    html = visible.map(renderItem).join('');
+  }
+
+  if (list.length > state.visibleCount) {
+    const remaining = list.length - state.visibleCount;
+    html += `<button type="button" class="btn btn-ghost btn-sm load-more-chats">Show ${Math.min(remaining, PAGE_SIZE)} more (${remaining} left)</button>`;
   }
 
   els.chatList.innerHTML = html;
-
-  els.chatList.querySelectorAll('.chat-item').forEach((item) => {
-    item.addEventListener('click', (e) => {
-      if (e.target.tagName === 'INPUT') return;
-      const id = item.dataset.id;
-      const checkbox = item.querySelector('input');
-      checkbox.checked = !checkbox.checked;
-      toggleChat(id, checkbox.checked);
-      item.classList.toggle('selected', checkbox.checked);
-    });
-
-    item.querySelector('input').addEventListener('change', (e) => {
-      toggleChat(item.dataset.id, e.target.checked);
-      item.classList.toggle('selected', e.target.checked);
-    });
-  });
-
   updateSelectedCount();
 }
 
-function updateChatSummary(groupCount, contactCount) {
-  const totalGroups = state.chats.filter((c) => c.isGroup).length;
-  const totalContacts = state.chats.filter((c) => !c.isGroup).length;
-  els.chatSummary.textContent = `${totalGroups} groups · ${totalContacts} contacts available`;
+function updateChatSummary() {
+  if (!state.chats.length) {
+    els.chatSummary.textContent = state.loadingChats ? 'Loading...' : 'Tap Refresh to load chats';
+    return;
+  }
+  els.chatSummary.textContent = `${chatCounts.groups} groups · ${chatCounts.contacts} contacts`;
 }
 
 function toggleChat(id, selected) {
   if (selected) state.selectedChats.add(id);
   else state.selectedChats.delete(id);
   updateSelectedCount();
+  els.chatList.querySelectorAll(`.chat-item[data-id="${CSS.escape(id)}"]`).forEach((item) => {
+    item.classList.toggle('selected', selected);
+    const input = item.querySelector('input');
+    if (input) input.checked = selected;
+  });
 }
 
 function updateSelectedCount() {
@@ -164,17 +188,9 @@ function toLocalDatetime(date) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-async function fetchStatus() {
-  try {
-    const res = await fetch('/api/status');
-    const data = await res.json();
-    updateConnectionUI(data);
-  } catch {
-    updateConnectionUI({ state: 'disconnected' });
-  }
-}
-
 function updateConnectionUI({ state: connState, qr, connectedInfo }) {
+  const wasReady = state.connectionState === 'ready';
+  state.connectionState = connState;
   els.statusDot.className = `status-dot ${connState}`;
 
   const labels = {
@@ -196,12 +212,27 @@ function updateConnectionUI({ state: connState, qr, connectedInfo }) {
   if (connState === 'ready') {
     els.qrOverlay.classList.add('hidden');
     els.connectBtn.textContent = 'Disconnect';
-    loadChats();
-    setTimeout(() => {
-      if (state.chats.length === 0) loadChats(true);
-    }, 4000);
+    if (!wasReady && !state.chatsLoaded && !state.loadingChats) {
+      loadChats(false);
+    }
   } else {
     els.connectBtn.textContent = connState === 'disconnected' ? 'Connect WhatsApp' : 'Connecting...';
+    if (connState === 'disconnected') {
+      state.chatsLoaded = false;
+      state.contactsLoaded = false;
+      state.chats = [];
+      chatCounts = { groups: 0, contacts: 0 };
+    }
+  }
+}
+
+async function fetchStatus() {
+  try {
+    const res = await fetch('/api/status');
+    const data = await res.json();
+    updateConnectionUI(data);
+  } catch {
+    updateConnectionUI({ state: 'disconnected' });
   }
 }
 
@@ -212,6 +243,9 @@ async function connect() {
     await fetch('/api/disconnect', { method: 'POST' });
     state.chats = [];
     state.selectedChats.clear();
+    state.chatsLoaded = false;
+    state.contactsLoaded = false;
+    chatCounts = { groups: 0, contacts: 0 };
     renderChats();
     showToast('Disconnected');
     return fetchStatus();
@@ -230,23 +264,62 @@ function pollStatus() {
     if (data.state === 'ready' || data.state === 'disconnected' || data.state === 'auth_failure') {
       clearInterval(interval);
     }
-  }, 2000);
+  }, 3000);
+}
+
+function needsContacts() {
+  return state.chatFilter === 'contacts' || state.chatFilter === 'all';
 }
 
 async function loadChats(refresh = false) {
+  if (state.loadingChats) return;
+
+  state.loadingChats = true;
+  state.visibleCount = PAGE_SIZE;
   els.chatList.innerHTML = '<p class="placeholder">Loading chats...</p>';
+  updateChatSummary();
+
   try {
-    const url = refresh ? '/api/chats?refresh=1' : '/api/chats';
-    const res = await fetch(url);
+    const params = new URLSearchParams();
+    if (refresh) params.set('refresh', '1');
+    if (refresh && needsContacts()) params.set('contacts', '1');
+
+    const res = await fetch(`/api/chats?${params}`);
     if (!res.ok) throw new Error((await res.json()).error || 'Failed to load chats');
+
     state.chats = await res.json();
+    state.chatsLoaded = true;
+    state.contactsLoaded = needsContacts();
+    chatCounts = {
+      groups: state.chats.filter((c) => c.isGroup).length,
+      contacts: state.chats.filter((c) => !c.isGroup).length,
+    };
     renderChats(els.chatSearch.value);
-    if (state.chats.length === 0) {
-      showToast('No chats found — try Refresh', 'error');
-    }
   } catch (err) {
-    els.chatList.innerHTML = `<p class="placeholder">Could not load chats. Click Refresh to try again.</p>`;
+    els.chatList.innerHTML = '<p class="placeholder">Could not load chats. Tap Refresh to try again.</p>';
     showToast(err.message || 'Failed to load chats', 'error');
+  } finally {
+    state.loadingChats = false;
+  }
+}
+
+async function ensureContactsLoaded() {
+  if (state.contactsLoaded || state.loadingChats) return;
+  state.loadingChats = true;
+  try {
+    const res = await fetch('/api/chats?contacts=1');
+    if (!res.ok) throw new Error((await res.json()).error || 'Failed to load contacts');
+    state.chats = await res.json();
+    state.contactsLoaded = true;
+    chatCounts = {
+      groups: state.chats.filter((c) => c.isGroup).length,
+      contacts: state.chats.filter((c) => !c.isGroup).length,
+    };
+    renderChats(els.chatSearch.value);
+  } catch (err) {
+    showToast(err.message || 'Failed to load contacts', 'error');
+  } finally {
+    state.loadingChats = false;
   }
 }
 
@@ -381,6 +454,30 @@ async function deletePoll(id) {
   }
 }
 
+els.chatList.addEventListener('click', (e) => {
+  const loadMore = e.target.closest('.load-more-chats');
+  if (loadMore) {
+    state.visibleCount += PAGE_SIZE;
+    renderChats(els.chatSearch.value);
+    return;
+  }
+
+  const item = e.target.closest('.chat-item');
+  if (!item) return;
+
+  if (e.target.tagName !== 'INPUT') {
+    const checkbox = item.querySelector('input');
+    checkbox.checked = !checkbox.checked;
+    toggleChat(item.dataset.id, checkbox.checked);
+  }
+});
+
+els.chatList.addEventListener('change', (e) => {
+  const item = e.target.closest('.chat-item');
+  if (!item || e.target.tagName !== 'INPUT') return;
+  toggleChat(item.dataset.id, e.target.checked);
+});
+
 els.connectBtn.addEventListener('click', connect);
 els.closeQrBtn.addEventListener('click', () => els.qrOverlay.classList.add('hidden'));
 els.addOptionBtn.addEventListener('click', () => {
@@ -388,15 +485,32 @@ els.addOptionBtn.addEventListener('click', () => {
   state.options.push('');
   renderOptions();
 });
-els.chatSearch.addEventListener('input', (e) => renderChats(e.target.value));
+
+els.chatSearch.addEventListener('input', (e) => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    state.visibleCount = PAGE_SIZE;
+    renderChats(e.target.value);
+  }, 250);
+});
+
 document.querySelectorAll('.chat-filter').forEach((btn) => {
-  btn.addEventListener('click', () => {
+  btn.addEventListener('click', async () => {
     document.querySelectorAll('.chat-filter').forEach((b) => b.classList.remove('active'));
     btn.classList.add('active');
     state.chatFilter = btn.dataset.filter;
-    renderChats(els.chatSearch.value);
+    state.visibleCount = PAGE_SIZE;
+
+    if (needsContacts() && state.chatsLoaded && !state.contactsLoaded) {
+      await ensureContactsLoaded();
+    } else if (!state.chatsLoaded && state.connectionState === 'ready') {
+      await loadChats(false);
+    } else {
+      renderChats(els.chatSearch.value);
+    }
   });
 });
+
 els.refreshChatsBtn.addEventListener('click', () => loadChats(true));
 els.scheduleBtn.addEventListener('click', () => submitPoll(false));
 els.sendNowBtn.addEventListener('click', () => submitPoll(true));
@@ -406,5 +520,15 @@ renderOptions();
 setDefaultSchedule();
 fetchStatus();
 loadPolls();
-setInterval(fetchStatus, 10000);
-setInterval(loadPolls, 15000);
+
+setInterval(() => {
+  if (document.hidden) return;
+  fetchStatus();
+}, 30000);
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) {
+    fetchStatus();
+    loadPolls();
+  }
+});
