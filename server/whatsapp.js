@@ -1,7 +1,23 @@
 const { Client, LocalAuth, Poll } = require('whatsapp-web.js');
 const qrcode = require('qrcode');
+const fs = require('fs');
 const path = require('path');
 const { humanLikeDelay, staggeredChatDelay, sleep, randomBetween } = require('./humanSend');
+
+const CHROME_CANDIDATES = [
+  process.env.PUPPETEER_EXECUTABLE_PATH,
+  '/usr/bin/chromium',
+  '/usr/local/bin/google-chrome',
+  '/usr/bin/google-chrome',
+  '/usr/bin/chromium-browser',
+].filter(Boolean);
+
+function resolveChromePath() {
+  for (const candidate of CHROME_CANDIDATES) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return undefined;
+}
 
 let client = null;
 let connectionState = 'disconnected';
@@ -201,7 +217,7 @@ async function initialize() {
     },
     puppeteer: {
       headless: true,
-      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+      executablePath: resolveChromePath(),
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',

@@ -110,9 +110,14 @@ function renderChats(filter = '') {
   updateChatSummary();
 
   if (filtered.length === 0) {
-    const emptyMessage = state.connectionState === 'ready'
-      ? 'No chats loaded yet. Tap Refresh above.'
-      : 'Connect WhatsApp to load your chats';
+    const emptyMessage =
+      state.connectionState === 'ready'
+        ? 'No chats loaded yet. Tap Refresh above.'
+        : state.connectionState === 'qr'
+          ? 'Scan the QR code to connect WhatsApp, then your chats will appear here.'
+          : state.connectionState === 'authenticated' || state.connectionState === 'connecting'
+            ? 'Connecting to WhatsApp...'
+            : 'Click Connect WhatsApp above to load your chats';
     els.chatList.innerHTML = `<p class="placeholder">${state.chats.length ? 'No chats match your search' : emptyMessage}</p>`;
     return;
   }
@@ -215,6 +220,7 @@ function updateConnectionUI({ state: connState, qr, connectedInfo }) {
   if (connState === 'qr' && qr) {
     els.qrImage.src = qr;
     els.qrOverlay.classList.remove('hidden');
+    renderChats();
   }
 
   if (connState === 'ready') {
@@ -224,13 +230,15 @@ function updateConnectionUI({ state: connState, qr, connectedInfo }) {
       loadChats(true);
     }
   } else {
-    els.connectBtn.textContent = connState === 'disconnected' ? 'Connect WhatsApp' : 'Connecting...';
+    els.connectBtn.textContent =
+      connState === 'qr' ? 'Show QR Code' : connState === 'disconnected' ? 'Connect WhatsApp' : 'Connecting...';
     if (connState === 'disconnected') {
       state.chatsLoaded = false;
       state.contactsLoaded = false;
       state.chats = [];
       chatCounts = { groups: 0, contacts: 0 };
     }
+    renderChats();
   }
 }
 
@@ -257,6 +265,13 @@ async function connect() {
     renderChats();
     showToast('Disconnected');
     return fetchStatus();
+  }
+
+  if (status.state === 'qr') {
+    updateConnectionUI(status);
+    showToast('Scan the QR code with your phone');
+    pollStatus();
+    return;
   }
 
   await apiFetch('/api/connect', { method: 'POST' });
