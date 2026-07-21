@@ -1,7 +1,7 @@
 const { Client, LocalAuth, Poll } = require('whatsapp-web.js');
 const qrcode = require('qrcode');
 const path = require('path');
-const { humanLikeDelay, staggeredChatDelay } = require('./humanSend');
+const { humanLikeDelay, staggeredChatDelay, sleep, randomBetween } = require('./humanSend');
 
 let client = null;
 let connectionState = 'disconnected';
@@ -22,6 +22,55 @@ function formatChat(chat) {
   };
 }
 
+function formatDirectChat(chat) {
+  return {
+    id: chat.id,
+    name: chat.name || 'Unknown chat',
+    isGroup: Boolean(chat.isGroup),
+    unreadCount: chat.unreadCount || 0,
+    lastMessage: chat.lastMessage || '',
+  };
+}
+
+async function fetchChatsDirect() {
+  const result = await client.pupPage.evaluate(() => {
+    const collections = window.require('WAWebCollections');
+    const chats = collections.Chat.getModelsArray();
+
+    return chats.map((chat) => {
+      const id = chat.id?._serialized || String(chat.id);
+      const name =
+        chat.formattedTitle ||
+        chat.name ||
+        chat.contact?.pushname ||
+        chat.contact?.name ||
+        (id.includes('@') ? id.split('@')[0] : id) ||
+        'Unknown';
+
+      const isGroup = Boolean(chat.groupMetadata);
+      const isReadOnly = Boolean(chat.groupMetadata?.announce);
+      const unreadCount = chat.unreadCount || 0;
+
+      let lastMessage = '';
+      try {
+        if (chat.lastReceivedKey?._serialized) {
+          const msg = collections.Msg.get(chat.lastReceivedKey._serialized);
+          lastMessage = msg?.body?.slice(0, 60) || '';
+        }
+      } catch (_) {
+        // ignore missing last message
+      }
+
+      return { id, name, isGroup, isReadOnly, unreadCount, lastMessage };
+    });
+  });
+
+  return result
+    .filter((chat) => chat.id && !chat.isReadOnly)
+    .map(formatDirectChat)
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
 async function fetchAndCacheChats(retries = 3) {
   if (!client || connectionState !== 'ready') {
     throw new Error('WhatsApp is not connected');
@@ -31,22 +80,39 @@ async function fetchAndCacheChats(retries = 3) {
 
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
+      cachedChats = await fetchChatsDirect();
+      if (cachedChats.length > 0) {
+        return cachedChats;
+      }
+    } catch (err) {
+      lastError = err;
+      console.error(`Direct chat fetch attempt ${attempt}/${retries} failed:`, err.message);
+    }
+
+    try {
       const chats = await client.getChats();
       cachedChats = chats
         .filter((chat) => !chat.isReadOnly)
         .map(formatChat)
         .sort((a, b) => a.name.localeCompare(b.name));
-      return cachedChats;
+      if (cachedChats.length > 0) {
+        return cachedChats;
+      }
     } catch (err) {
       lastError = err;
       console.error(`getChats attempt ${attempt}/${retries} failed:`, err.message);
-      if (attempt < retries) {
-        await new Promise((r) => setTimeout(r, 1500 * attempt));
-      }
+    }
+
+    if (attempt < retries) {
+      await new Promise((r) => setTimeout(r, 1500 * attempt));
     }
   }
 
-  throw lastError || new Error('Failed to load chats');
+  if (cachedChats.length > 0) {
+    return cachedChats;
+  }
+
+  throw lastError || new Error('Failed to load chats. Try clicking Refresh.');
 }
 
 const eventListeners = {
@@ -236,11 +302,21 @@ async function sendPollToChats({
         maxSeconds: humanDelayMax,
       });
 
-      const chat = await client.getChatById(chatId);
-      await humanLikeDelay(chat, question, {
-        minSeconds: humanDelayMin,
-        maxSeconds: humanDelayMax,
-      });
+      let chat = null;
+      try {
+        chat = await client.getChatById(chatId);
+      } catch (err) {
+        console.warn(`getChatById failed for ${chatId}:`, err.message);
+      }
+
+      if (chat) {
+        await humanLikeDelay(chat, question, {
+          minSeconds: humanDelayMin,
+          maxSeconds: humanDelayMax,
+        });
+      } else {
+        await sleep(randomBetween(humanDelayMin * 1000, humanDelayMax * 1000));
+      }
 
       await client.sendMessage(chatId, poll, {
         sendSeen: false,
