@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Poll Scheduler — WhatsApp</title>
+  <link rel="stylesheet" href="/css/style.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <div class="app">
+    <header class="header">
+      <div class="header-brand">
+        <div class="logo">📊</div>
+        <div>
+          <h1>Poll Scheduler</h1>
+          <p class="subtitle">Schedule native WhatsApp polls — sent naturally</p>
+        </div>
+      </div>
+      <div class="connection-panel" id="connectionPanel">
+        <span class="status-dot" id="statusDot"></span>
+        <span id="statusText">Disconnected</span>
+        <button class="btn btn-sm" id="connectBtn">Connect WhatsApp</button>
+      </div>
+    </header>
+
+    <div class="qr-overlay hidden" id="qrOverlay">
+      <div class="qr-card">
+        <h2>Scan with WhatsApp</h2>
+        <p>Works with <strong>WhatsApp</strong> and <strong>WhatsApp Business</strong></p>
+        <div class="qr-frame">
+          <img id="qrImage" alt="QR Code" />
+        </div>
+        <ol class="qr-steps">
+          <li>Open WhatsApp on your phone</li>
+          <li>Go to <em>Linked Devices</em> → <em>Link a Device</em></li>
+          <li>Scan this QR code</li>
+        </ol>
+        <button class="btn btn-ghost" id="closeQrBtn">Close</button>
+      </div>
+    </div>
+
+    <main class="main">
+      <section class="card create-poll">
+        <h2>Create Poll</h2>
+
+        <div class="form-group">
+          <label for="question">Poll Question</label>
+          <input type="text" id="question" placeholder="What should we do this weekend?" maxlength="255" />
+        </div>
+
+        <div class="form-group">
+          <label>Poll Options <span class="hint">(2–12 options)</span></label>
+          <div id="optionsList" class="options-list"></div>
+          <button type="button" class="btn btn-ghost btn-sm" id="addOptionBtn">+ Add option</button>
+        </div>
+
+        <div class="form-row">
+          <label class="checkbox-label">
+            <input type="checkbox" id="allowMultiple" />
+            Allow multiple answers
+          </label>
+        </div>
+
+        <div class="form-group">
+          <label>Select Chats</label>
+          <div class="chat-search">
+            <input type="text" id="chatSearch" placeholder="Search chats..." />
+            <button type="button" class="btn btn-ghost btn-sm" id="refreshChatsBtn">Refresh</button>
+          </div>
+          <div class="chat-list" id="chatList">
+            <p class="placeholder">Connect WhatsApp to load your chats</p>
+          </div>
+          <p class="selected-count" id="selectedCount">0 chats selected</p>
+        </div>
+
+        <div class="form-row two-col">
+          <div class="form-group">
+            <label for="scheduledAt">Schedule Date & Time</label>
+            <input type="datetime-local" id="scheduledAt" />
+          </div>
+          <div class="form-group">
+            <label>Human-like delay <span class="hint">(seconds between chats)</span></label>
+            <div class="range-row">
+              <input type="number" id="delayMin" value="3" min="1" max="60" />
+              <span>to</span>
+              <input type="number" id="delayMax" value="12" min="1" max="120" />
+              <span>sec</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button type="button" class="btn btn-primary" id="scheduleBtn">Schedule Poll</button>
+          <button type="button" class="btn btn-accent" id="sendNowBtn">Send Now</button>
+        </div>
+      </section>
+
+      <section class="card scheduled-polls">
+        <div class="section-header">
+          <h2>Scheduled Polls</h2>
+          <button type="button" class="btn btn-ghost btn-sm" id="refreshPollsBtn">Refresh</button>
+        </div>
+        <div id="pollsList" class="polls-list">
+          <p class="placeholder">No polls yet</p>
+        </div>
+      </section>
+    </main>
+
+    <div class="toast hidden" id="toast"></div>
+  </div>
+
+  <script src="/js/app.js"></script>
+</body>
+</html>
