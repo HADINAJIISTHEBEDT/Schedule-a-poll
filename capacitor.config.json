@@ -1,0 +1,12 @@
+{
+  "appId": "com.pollscheduler.app",
+  "appName": "Poll Scheduler",
+  "webDir": "public",
+  "server": {
+    "androidScheme": "https",
+    "cleartext": true
+  },
+  "android": {
+    "allowMixedContent": true
+  }
+}

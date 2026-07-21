@@ -6,7 +6,9 @@
   "scripts": {
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
-    "postinstall": "node scripts/patch-whatsapp.js"
+    "postinstall": "node scripts/patch-whatsapp.js",
+    "cap:sync": "npx cap sync android",
+    "build:apk": "node scripts/build-apk.js"
   },
   "engines": {
     "node": ">=18"
@@ -17,5 +19,10 @@
     "node-cron": "^3.0.3",
     "qrcode": "^1.5.4",
     "whatsapp-web.js": "^1.26.0"
+  },
+  "devDependencies": {
+    "@capacitor/android": "^6.2.0",
+    "@capacitor/cli": "^6.2.0",
+    "@capacitor/core": "^6.2.0"
   }
 }

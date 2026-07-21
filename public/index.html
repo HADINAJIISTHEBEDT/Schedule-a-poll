@@ -20,11 +20,25 @@
         </div>
       </div>
       <div class="connection-panel" id="connectionPanel">
+        <button type="button" class="btn btn-ghost btn-sm" id="serverSettingsBtn" title="Server settings">⚙️</button>
         <span class="status-dot" id="statusDot"></span>
         <span id="statusText">Disconnected</span>
         <button class="btn btn-sm" id="connectBtn">Connect WhatsApp</button>
       </div>
     </header>
+
+    <div class="qr-overlay hidden" id="serverOverlay">
+      <div class="qr-card">
+        <h2>Server Connection</h2>
+        <p>Enter the address where the app is running (your PC or server).</p>
+        <p class="hint-block">Example: <code>http://192.168.1.5:3000</code></p>
+        <input type="url" id="serverUrlInput" placeholder="http://192.168.1.5:3000" />
+        <div class="form-actions" style="margin-top:16px">
+          <button type="button" class="btn btn-primary" id="saveServerBtn">Save & Connect</button>
+          <button type="button" class="btn btn-ghost" id="closeServerBtn">Cancel</button>
+        </div>
+      </div>
+    </div>
 
     <div class="qr-overlay hidden" id="qrOverlay">
       <div class="qr-card">
@@ -118,6 +132,7 @@
     <div class="toast hidden" id="toast"></div>
   </div>
 
+  <script src="/js/config.js"></script>
   <script src="/js/app.js"></script>
 </body>
 </html>
