@@ -277,7 +277,12 @@ async function getChats({ refresh = false, includeContacts = false } = {}) {
   }
 
   if (!refresh && cachedChats.length > 0) {
-    return cachedChats;
+    if (includeContacts && cachedContacts) {
+      return mergeChatLists(cachedChats, cachedContacts);
+    }
+    if (!includeContacts) {
+      return cachedChats;
+    }
   }
 
   if (chatsLoading) {

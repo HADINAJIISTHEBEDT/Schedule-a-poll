@@ -218,7 +218,7 @@ function updateConnectionUI({ state: connState, qr, connectedInfo }) {
     els.qrOverlay.classList.add('hidden');
     els.connectBtn.textContent = 'Disconnect';
     if (!wasReady && !state.chatsLoaded && !state.loadingChats) {
-      loadChats(false);
+      loadChats(true);
     }
   } else {
     els.connectBtn.textContent = connState === 'disconnected' ? 'Connect WhatsApp' : 'Connecting...';

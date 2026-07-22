@@ -19,8 +19,15 @@ async function humanLikeDelay(chat, text, { minSeconds = 3, maxSeconds = 12 } = 
     20000
   );
 
-  await chat.sendStateTyping();
-  await sleep(typingDuration);
+  try {
+    await chat.sendStateTyping();
+    await sleep(typingDuration);
+    if (typeof chat.clearState === 'function') {
+      await chat.clearState();
+    }
+  } catch {
+    await sleep(typingDuration);
+  }
 }
 
 /**
