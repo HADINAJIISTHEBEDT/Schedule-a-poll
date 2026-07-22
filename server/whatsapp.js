@@ -6,11 +6,30 @@ const { humanLikeDelay, staggeredChatDelay, sleep, randomBetween } = require('./
 
 const CHROME_CANDIDATES = [
   process.env.PUPPETEER_EXECUTABLE_PATH,
-  '/usr/bin/chromium',
   '/usr/local/bin/google-chrome',
   '/usr/bin/google-chrome',
+  '/usr/bin/chromium',
   '/usr/bin/chromium-browser',
 ].filter(Boolean);
+
+const SESSION_PATH = path.join(__dirname, '..', 'data', 'whatsapp-session');
+
+const PUPPETEER_ARGS = [
+  '--no-sandbox',
+  '--disable-setuid-sandbox',
+  '--disable-dev-shm-usage',
+  '--disable-gpu',
+  '--no-first-run',
+  '--no-default-browser-check',
+  '--disable-features=IsolateOrigins,site-per-process,MemorySaverMode',
+  '--disable-site-isolation-trials',
+  '--memory-pressure-off',
+];
+
+function isDetachedFrameError(err) {
+  const message = String(err?.message || err || '');
+  return /detached frame|frame was detached|session closed|target closed/i.test(message);
+}
 
 function resolveChromePath() {
   for (const candidate of CHROME_CANDIDATES) {
@@ -205,27 +224,35 @@ function getStatus() {
   };
 }
 
-async function initialize({ force = false } = {}) {
-  const connectingTimedOut =
-    connectionState === 'connecting' &&
-    connectingSince > 0 &&
-    Date.now() - connectingSince > CONNECTING_TIMEOUT_MS;
+function clearSessionData() {
+  if (fs.existsSync(SESSION_PATH)) {
+    fs.rmSync(SESSION_PATH, { recursive: true, force: true });
+  }
+}
 
-  if (client && !force && !connectingTimedOut) {
-    if (connectionState === 'ready') return;
-    if (connectionState === 'qr' && lastQrDataUrl) return;
-    if (connectionState === 'authenticated') return;
-    if (connectionState === 'connecting') return;
+function clearBrowserLocks() {
+  const lockFiles = ['SingletonLock', 'SingletonSocket', 'SingletonCookie'];
+  for (const file of lockFiles) {
+    const lockPath = path.join(SESSION_PATH, 'session', file);
+    if (fs.existsSync(lockPath)) {
+      try {
+        fs.rmSync(lockPath, { force: true });
+      } catch {
+        // ignore
+      }
+    }
+  }
+}
+
+function createClient() {
+  const chromePath = resolveChromePath();
+  if (!chromePath) {
+    console.warn('No Chrome/Chromium binary found — Puppeteer will use its bundled browser');
   }
 
-  if (client) {
-    await disconnect();
-  }
-
-  connectingSince = Date.now();
-  client = new Client({
+  const instance = new Client({
     authStrategy: new LocalAuth({
-      dataPath: path.join(__dirname, '..', 'data', 'whatsapp-session'),
+      dataPath: SESSION_PATH,
     }),
     webVersionCache: {
       type: 'remote',
@@ -234,19 +261,13 @@ async function initialize({ force = false } = {}) {
     },
     puppeteer: {
       headless: true,
-      executablePath: resolveChromePath(),
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-        '--single-process',
-        '--no-zygote',
-      ],
+      executablePath: chromePath,
+      protocolTimeout: 120000,
+      args: PUPPETEER_ARGS,
     },
   });
 
-  client.on('qr', async (qr) => {
+  instance.on('qr', async (qr) => {
     try {
       connectionState = 'qr';
       connectingSince = 0;
@@ -258,19 +279,20 @@ async function initialize({ force = false } = {}) {
     }
   });
 
-  client.on('authenticated', () => {
+  instance.on('authenticated', () => {
     connectionState = 'authenticated';
     lastQr = null;
     lastQrDataUrl = null;
   });
 
-  client.on('ready', async () => {
+  instance.on('ready', async () => {
     connectionState = 'ready';
+    connectingSince = 0;
     lastQr = null;
     lastQrDataUrl = null;
 
     try {
-      const info = client.info;
+      const info = instance.info;
       connectedInfo = {
         pushname: info.pushname,
         phone: info.wid?.user,
@@ -282,7 +304,6 @@ async function initialize({ force = false } = {}) {
 
     emit('ready', connectedInfo);
 
-    // Load chats immediately on ready — waiting too long can return an empty list
     chatsLoading = true;
     fetchAndCacheChats({ refresh: true, includeContacts: true })
       .then((chats) => {
@@ -296,35 +317,92 @@ async function initialize({ force = false } = {}) {
       });
   });
 
-  client.on('disconnected', (reason) => {
+  instance.on('disconnected', (reason) => {
     connectionState = 'disconnected';
     connectedInfo = null;
     client = null;
+    connectingSince = 0;
     emit('disconnected', reason);
   });
 
-  client.on('auth_failure', (msg) => {
+  instance.on('auth_failure', (msg) => {
     connectionState = 'auth_failure';
+    connectingSince = 0;
     emit('auth_failure', msg);
   });
 
+  return instance;
+}
+
+async function initialize({ force = false, resetSession = false } = {}) {
+  const connectingTimedOut =
+    connectionState === 'connecting' &&
+    connectingSince > 0 &&
+    Date.now() - connectingSince > CONNECTING_TIMEOUT_MS;
+
+  if (client && !force && !connectingTimedOut && !resetSession) {
+    if (connectionState === 'ready') return;
+    if (connectionState === 'qr' && lastQrDataUrl) return;
+    if (connectionState === 'authenticated') return;
+    if (connectionState === 'connecting') return;
+  }
+
+  if (resetSession) {
+    clearSessionData();
+  } else {
+    clearBrowserLocks();
+  }
+
+  await disconnect();
+
   connectionState = 'connecting';
   connectingSince = Date.now();
-  try {
-    await client.initialize();
-  } catch (err) {
-    connectionState = 'disconnected';
-    connectingSince = 0;
-    client = null;
-    throw err;
+
+  let lastError = null;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    client = createClient();
+
+    try {
+      await client.initialize();
+      return;
+    } catch (err) {
+      lastError = err;
+      console.error(`WhatsApp init attempt ${attempt}/3 failed:`, err.message);
+      await disconnect();
+
+      if (!isDetachedFrameError(err) || attempt === 3) {
+        break;
+      }
+
+      if (attempt === 2) {
+        clearSessionData();
+      }
+
+      await sleep(2000 * attempt);
+    }
   }
+
+  connectionState = 'disconnected';
+  connectingSince = 0;
+  client = null;
+
+  const message = isDetachedFrameError(lastError)
+    ? 'Browser connection failed. Tap Connect again — it will retry automatically.'
+    : lastError?.message || 'Failed to start WhatsApp connection';
+
+  throw new Error(message);
 }
 
 async function disconnect() {
   if (client) {
-    await client.destroy();
+    try {
+      await client.destroy();
+    } catch (err) {
+      console.error('WhatsApp disconnect error:', err.message);
+    }
     client = null;
   }
+  clearBrowserLocks();
   connectionState = 'disconnected';
   connectedInfo = null;
   cachedChats = [];

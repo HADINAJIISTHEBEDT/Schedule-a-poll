@@ -312,8 +312,21 @@ async function connect() {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ force: status.state === 'connecting' && !status.qr }),
   });
-  const connectData = await connectRes.json();
-  if (!connectRes.ok) {
+  let connectData = await connectRes.json();
+
+  if (!connectRes.ok && /detached|session closed|target closed/i.test(connectData.error || '')) {
+    showToast('Retrying connection...', 'success');
+    const retryRes = await apiFetch('/api/connect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ force: true, reset: true }),
+    });
+    connectData = await retryRes.json();
+    if (!retryRes.ok) {
+      showToast(connectData.error || 'Failed to connect. Tap Connect again.', 'error');
+      return;
+    }
+  } else if (!connectRes.ok) {
     showToast(connectData.error || 'Failed to connect', 'error');
     return;
   }
