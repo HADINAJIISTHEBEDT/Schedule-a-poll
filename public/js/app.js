@@ -3,6 +3,7 @@ const PAGE = 50;
 
 const state = {
   chats: [],
+  visibleChats: [],
   selected: new Set(),
   options: ['', ''],
   filter: 'all',
@@ -45,15 +46,11 @@ function esc(s) {
   return d.innerHTML;
 }
 
-function safeId(id) {
-  return 'id-' + String(id).replace(/[^a-zA-Z0-9]/g, '_');
-}
-
 function toast(msg, type = 'success') {
   els.toast.textContent = msg;
   els.toast.className = `toast ${type}`;
   els.toast.classList.remove('hidden');
-  setTimeout(() => els.toast.classList.add('hidden'), 3500);
+  setTimeout(() => els.toast.classList.add('hidden'), 4000);
 }
 
 function filteredChats(term = '') {
@@ -72,34 +69,36 @@ function renderChats(term = '') {
   const dms = list.filter((c) => !c.isGroup);
 
   if (state.chats.length) {
-    els.chatSummary.textContent = `${groups.length} groups · ${dms.length} chats`;
+    els.chatSummary.textContent = `${state.chats.length} total · ${groups.length} groups · ${dms.length} chats`;
   } else {
-    els.chatSummary.textContent = state.loading ? 'Loading...' : 'Connect WhatsApp to load chats';
+    els.chatSummary.textContent = state.loading ? 'Loading contacts...' : 'Connect WhatsApp to load contacts';
   }
 
   if (!list.length) {
     const msg = state.chats.length
-      ? 'No matches'
+      ? 'No matches for your search'
       : state.conn === 'ready'
-        ? 'Tap Refresh to load chats'
+        ? 'Loading contacts... tap Refresh if empty'
         : state.conn === 'qr'
           ? 'Scan the QR code first'
-          : 'Click Connect WhatsApp';
+          : 'Click Connect WhatsApp above';
     els.chatList.innerHTML = `<p class="placeholder">${msg}</p>`;
+    state.visibleChats = [];
     return;
   }
 
   const ordered = state.filter === 'all' ? [...groups, ...dms] : list;
   const shown = ordered.slice(0, state.visible);
+  state.visibleChats = shown;
 
-  const item = (c) => {
-    const id = safeId(c.id);
+  const item = (c, idx) => {
     const sel = state.selected.has(c.id);
-    const attrId = c.id.replace(/"/g, '&quot;');
-    return `<div class="chat-item${sel ? ' selected' : ''}" data-id="${attrId}">
-      <input type="checkbox" class="chat-check" id="${id}" ${sel ? 'checked' : ''} />
-      <label for="${id}"><span class="chat-name">${esc(c.name)}</span>
-      <span class="chat-meta">${c.isGroup ? 'Group' : 'Chat'}</span></label>
+    return `<div class="chat-item${sel ? ' selected' : ''}" data-idx="${idx}">
+      <input type="checkbox" class="chat-check" ${sel ? 'checked' : ''} aria-label="${esc(c.name)}" />
+      <div class="chat-info">
+        <span class="chat-name">${esc(c.name)}</span>
+        <span class="chat-meta">${c.isGroup ? 'Group' : 'Chat'}</span>
+      </div>
     </div>`;
   };
 
@@ -107,11 +106,18 @@ function renderChats(term = '') {
   if (state.filter === 'all' && !term) {
     const sg = shown.filter((c) => c.isGroup);
     const sd = shown.filter((c) => !c.isGroup);
-    if (sg.length) html += `<div class="section-label">Groups (${groups.length})</div>` + sg.map(item).join('');
-    if (sd.length) html += `<div class="section-label">Chats (${dms.length})</div>` + sd.map(item).join('');
-    if (!html) html = shown.map(item).join('');
+    let idx = 0;
+    if (sg.length) {
+      html += `<div class="section-label">Groups (${groups.length})</div>`;
+      html += sg.map((c) => item(c, shown.indexOf(c))).join('');
+    }
+    if (sd.length) {
+      html += `<div class="section-label">Chats (${dms.length})</div>`;
+      html += sd.map((c) => item(c, shown.indexOf(c))).join('');
+    }
+    if (!html) html = shown.map((c, i) => item(c, i)).join('');
   } else {
-    html = shown.map(item).join('');
+    html = shown.map((c, i) => item(c, i)).join('');
   }
 
   if (ordered.length > state.visible) {
@@ -120,11 +126,19 @@ function renderChats(term = '') {
   }
 
   els.chatList.innerHTML = html;
-  els.selectedCount.textContent = `${state.selected.size} chat${state.selected.size !== 1 ? 's' : ''} selected`;
+  els.selectedCount.textContent = `${state.selected.size} contact${state.selected.size !== 1 ? 's' : ''} selected`;
 }
 
 function scrollToChats() {
   document.getElementById('chatSelectSection')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function toggleChatSelection(idx, checked) {
+  const chat = state.visibleChats[idx];
+  if (!chat) return;
+  if (checked) state.selected.add(chat.id);
+  else state.selected.delete(chat.id);
+  els.selectedCount.textContent = `${state.selected.size} contact${state.selected.size !== 1 ? 's' : ''} selected`;
 }
 
 function setConn(data) {
@@ -133,11 +147,11 @@ function setConn(data) {
 
   const labels = {
     disconnected: 'Disconnected',
-    connecting: 'Connecting...',
-    qr: 'Scan QR Code',
-    authenticated: 'Authenticating...',
+    connecting: 'Starting...',
+    qr: 'Scan QR Code with phone',
+    authenticated: 'QR scanned — syncing...',
     ready: data.connectedInfo ? `Connected as ${data.connectedInfo.pushname}` : 'Connected',
-    auth_failure: 'Auth failed',
+    auth_failure: 'Auth failed — try again',
   };
   els.statusDot.className = `status-dot ${data.state}`;
   els.statusText.textContent = labels[data.state] || data.state;
@@ -149,12 +163,17 @@ function setConn(data) {
   } else if (data.state === 'ready') {
     els.qrOverlay.classList.add('hidden');
     els.connectBtn.textContent = 'Disconnect';
-    if (!wasReady) loadChats(true);
-    else renderChats(els.chatSearch.value);
+    if (!wasReady) {
+      toast(`Connected! Loading contacts...`);
+      loadChats(true);
+    } else {
+      renderChats(els.chatSearch.value);
+    }
   } else {
     els.connectBtn.textContent = data.state === 'disconnected' ? 'Connect WhatsApp' : 'Connecting...';
     if (data.state === 'disconnected') {
       state.chats = [];
+      state.visibleChats = [];
       state.selected.clear();
       els.qrOverlay.classList.add('hidden');
       renderChats();
@@ -167,6 +186,9 @@ async function getStatus() {
     const data = await (await apiFetch('/api/status')).json();
     setConn(data);
     if (['connecting', 'qr', 'authenticated'].includes(data.state)) startPoll();
+    if (data.state === 'ready' && !state.chats.length && !state.loading) {
+      loadChats(true);
+    }
   } catch {
     setConn({ state: 'disconnected' });
   }
@@ -193,15 +215,16 @@ function startPoll() {
 
 async function toggleConnect() {
   els.connectBtn.disabled = true;
-
   try {
     const data = await (await apiFetch('/api/status')).json();
 
     if (data.state === 'ready') {
+      els.statusText.textContent = 'Disconnecting...';
       await apiFetch('/api/disconnect', { method: 'POST' });
       state.chats = [];
+      state.visibleChats = [];
       state.selected.clear();
-      toast('Disconnected — scan QR to connect again');
+      toast('Disconnected — you must scan QR to connect again');
       return getStatus();
     }
 
@@ -211,18 +234,20 @@ async function toggleConnect() {
       return;
     }
 
-    els.statusText.textContent = 'Connecting...';
+    els.statusText.textContent = 'Starting — QR will appear...';
     const res = await apiFetch('/api/connect', { method: 'POST' });
     const body = await res.json();
+
     if (!res.ok) {
       toast(body.error || 'Connect failed', 'error');
       return getStatus();
     }
+
     setConn(body);
     if (body.qr) {
-      toast('Scan the QR code with your phone');
+      toast('Scan the QR code with WhatsApp → Linked Devices');
     } else if (body.state === 'ready') {
-      toast('Connected');
+      toast('Connected without QR — if this is wrong, disconnect and try again', 'error');
     } else {
       toast('Waiting for QR code...');
     }
@@ -233,33 +258,41 @@ async function toggleConnect() {
 }
 
 async function loadChats(refresh = false, attempt = 1) {
+  if (state.conn !== 'ready') return;
   if (state.loading && attempt === 1) return;
+
   state.loading = true;
   state.visible = PAGE;
-  els.chatList.innerHTML = '<p class="placeholder">Loading chats...</p>';
+  els.chatList.innerHTML = `<p class="placeholder">Loading contacts... (${attempt})</p>`;
 
   try {
-    const url = refresh || attempt > 1 ? '/api/chats?refresh=1' : '/api/chats';
+    const needsRefresh = refresh || attempt > 1;
+    const url = `/api/chats?refresh=${needsRefresh ? 1 : 0}`;
     const res = await apiFetch(url);
-    if (!res.ok) throw new Error((await res.json()).error || 'Failed');
-    state.chats = await res.json();
+    const body = await res.json();
+
+    if (!res.ok) throw new Error(body.error || 'Failed to load contacts');
+
+    state.chats = Array.isArray(body) ? body : [];
     renderChats(els.chatSearch.value);
     scrollToChats();
 
-    if (!state.chats.length && state.conn === 'ready' && attempt < 6) {
-      els.chatList.innerHTML = `<p class="placeholder">Syncing chats... (${attempt}/6)</p>`;
-      await new Promise((r) => setTimeout(r, 3000));
+    if (state.chats.length > 0) {
+      toast(`Loaded ${state.chats.length} contacts`);
+      return;
+    }
+
+    if (attempt < 8) {
+      await new Promise((r) => setTimeout(r, 4000));
       state.loading = false;
       return loadChats(true, attempt + 1);
     }
 
-    if (!state.chats.length && state.conn === 'ready') {
-      els.chatList.innerHTML = '<p class="placeholder">No chats found — tap Refresh</p>';
-    }
+    els.chatList.innerHTML = '<p class="placeholder">No contacts found — tap Refresh or reconnect</p>';
+    toast('No contacts loaded — try Refresh', 'error');
   } catch (e) {
-    if (state.conn === 'ready' && attempt < 6) {
-      els.chatList.innerHTML = `<p class="placeholder">Syncing chats... (${attempt}/6)</p>`;
-      await new Promise((r) => setTimeout(r, 3000));
+    if (attempt < 8) {
+      await new Promise((r) => setTimeout(r, 4000));
       state.loading = false;
       return loadChats(true, attempt + 1);
     }
@@ -322,7 +355,7 @@ async function submitPoll(now = false) {
   const chatIds = [...state.selected];
   if (!question) return toast('Enter a question', 'error');
   if (options.length < 2) return toast('Need 2+ options', 'error');
-  if (!chatIds.length) return toast('Select at least one chat', 'error');
+  if (!chatIds.length) return toast('Select at least one contact', 'error');
 
   const scheduledAt = now ? null : new Date(els.scheduledAt.value).toISOString();
   if (!now && (!scheduledAt || Number.isNaN(Date.parse(scheduledAt)))) {
@@ -352,7 +385,6 @@ async function submitPoll(now = false) {
   loadPolls();
 }
 
-// Events
 els.connectBtn.onclick = toggleConnect;
 els.closeQrBtn.onclick = () => els.qrOverlay.classList.add('hidden');
 els.addOptionBtn.onclick = () => {
@@ -366,7 +398,7 @@ els.scheduleBtn.onclick = () => submitPoll(false);
 els.sendNowBtn.onclick = () => submitPoll(true);
 els.refreshPollsBtn.onclick = loadPolls;
 
-els.chatList.onclick = (e) => {
+els.chatList.addEventListener('click', (e) => {
   if (e.target.closest('.load-more')) {
     state.visible += PAGE;
     renderChats(els.chatSearch.value);
@@ -374,26 +406,24 @@ els.chatList.onclick = (e) => {
   }
   const row = e.target.closest('.chat-item');
   if (!row) return;
-  const chatId = row.getAttribute('data-id');
+  const idx = parseInt(row.dataset.idx, 10);
+  if (Number.isNaN(idx)) return;
   const cb = row.querySelector('.chat-check');
-  if (!cb || !chatId) return;
-  if (e.target !== cb) cb.checked = !cb.checked;
-  if (cb.checked) state.selected.add(chatId);
-  else state.selected.delete(chatId);
-  row.classList.toggle('selected', cb.checked);
-  els.selectedCount.textContent = `${state.selected.size} chat${state.selected.size !== 1 ? 's' : ''} selected`;
-};
+  if (e.target === cb) return;
+  const newChecked = !cb.checked;
+  cb.checked = newChecked;
+  row.classList.toggle('selected', newChecked);
+  toggleChatSelection(idx, newChecked);
+});
 
 els.chatList.addEventListener('change', (e) => {
   if (!e.target.classList.contains('chat-check')) return;
   const row = e.target.closest('.chat-item');
   if (!row) return;
-  const chatId = row.getAttribute('data-id');
-  if (!chatId) return;
-  if (e.target.checked) state.selected.add(chatId);
-  else state.selected.delete(chatId);
+  const idx = parseInt(row.dataset.idx, 10);
+  if (Number.isNaN(idx)) return;
   row.classList.toggle('selected', e.target.checked);
-  els.selectedCount.textContent = `${state.selected.size} chat${state.selected.size !== 1 ? 's' : ''} selected`;
+  toggleChatSelection(idx, e.target.checked);
 });
 
 document.querySelectorAll('.chat-filter').forEach((btn) => {
@@ -402,12 +432,10 @@ document.querySelectorAll('.chat-filter').forEach((btn) => {
     btn.classList.add('active');
     state.filter = btn.dataset.filter;
     state.visible = PAGE;
-    if (state.conn === 'ready' && !state.chats.length) loadChats(true);
-    else renderChats(els.chatSearch.value);
+    renderChats(els.chatSearch.value);
   };
 });
 
-// Init
 const sched = new Date();
 sched.setMinutes(sched.getMinutes() + 30);
 sched.setSeconds(0);

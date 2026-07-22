@@ -50,7 +50,7 @@ app.post('/api/connect', async (_req, res) => {
       await whatsapp.disconnect();
       return res.status(409).json({
         ok: false,
-        error: 'Session restored without QR — disconnected. Click Connect again to scan QR.',
+        error: 'Auto-login blocked. Click Connect again — QR code is required.',
         ...whatsapp.getStatus(),
       });
     }
