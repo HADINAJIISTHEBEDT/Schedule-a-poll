@@ -95,8 +95,8 @@ function renderChats(term = '') {
   for (let i = 0; i < shown.length; i++) {
     const c = shown[i];
     const sel = state.selected.has(c.id);
-    html += `<div class="chat-item${sel ? ' selected' : ''}" data-idx="${i}">
-      <input type="checkbox" class="chat-check" ${sel ? 'checked' : ''} aria-label="${esc(c.name)}" />
+    html += `<div class="chat-item${sel ? ' selected' : ''}" data-idx="${i}" role="button" tabindex="0">
+      <span class="tick-box" aria-hidden="true">${sel ? '✓' : ''}</span>
       <div class="chat-info">
         <span class="chat-name">${esc(c.name)}</span>
         <span class="chat-meta">${c.isGroup ? 'Group' : 'Chat'}</span>
@@ -117,12 +117,12 @@ function scrollToChats() {
   document.getElementById('chatSelectSection')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
-function toggleChatSelection(idx, checked) {
+function toggleChatSelection(idx) {
   const chat = state.visibleChats[idx];
   if (!chat) return;
-  if (checked) state.selected.add(chat.id);
-  else state.selected.delete(chat.id);
-  els.selectedCount.textContent = `${state.selected.size} contact${state.selected.size !== 1 ? 's' : ''} selected`;
+  if (state.selected.has(chat.id)) state.selected.delete(chat.id);
+  else state.selected.add(chat.id);
+  renderChats(els.chatSearch.value);
 }
 
 function setConn(data) {
@@ -392,22 +392,16 @@ els.chatList.addEventListener('click', (e) => {
   if (!row) return;
   const idx = parseInt(row.dataset.idx, 10);
   if (Number.isNaN(idx)) return;
-  const cb = row.querySelector('.chat-check');
-  if (e.target === cb) return;
-  const newChecked = !cb.checked;
-  cb.checked = newChecked;
-  row.classList.toggle('selected', newChecked);
-  toggleChatSelection(idx, newChecked);
+  toggleChatSelection(idx);
 });
 
-els.chatList.addEventListener('change', (e) => {
-  if (!e.target.classList.contains('chat-check')) return;
+els.chatList.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
   const row = e.target.closest('.chat-item');
   if (!row) return;
+  e.preventDefault();
   const idx = parseInt(row.dataset.idx, 10);
-  if (Number.isNaN(idx)) return;
-  row.classList.toggle('selected', e.target.checked);
-  toggleChatSelection(idx, e.target.checked);
+  if (!Number.isNaN(idx)) toggleChatSelection(idx);
 });
 
 document.querySelectorAll('.chat-filter').forEach((btn) => {

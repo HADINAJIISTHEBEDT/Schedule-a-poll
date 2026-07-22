@@ -6,10 +6,14 @@ const whatsapp = require('./whatsapp');
 const scheduler = require('./scheduler');
 
 const app = express();
-const PORT = Number(process.env.PORT) || 3001;
+const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
 
 app.use(express.json());
+app.use((_req, res, next) => {
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+  next();
+});
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
 const apkPath = path.join(__dirname, '..', 'releases', 'poll-scheduler.apk');

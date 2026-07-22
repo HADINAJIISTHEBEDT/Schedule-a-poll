@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-const BASE = process.env.TEST_URL || 'http://localhost:3001';
+const BASE = process.env.TEST_URL || 'http://localhost:3000';
 
 async function test(name, fn) {
   try {
@@ -37,11 +37,11 @@ async function run() {
     const html = await res.text();
     assert(res.ok, `status ${res.status}`);
     assert(html.includes('Poll Scheduler'), 'missing title');
-    assert(html.includes('app.js?v=6'), 'missing cache bust v=6');
+    assert(html.includes('app.js?v=7'), 'missing cache bust v=7');
   });
 
   await runTest('CSS has vertical chat list layout', async () => {
-    const res = await fetch(`${BASE}/css/style.css?v=6`);
+    const res = await fetch(`${BASE}/css/style.css?v=7`);
     const css = await res.text();
     assert(res.ok, `status ${res.status}`);
     assert(css.includes('flex-direction: column'), 'chat list not vertical');
