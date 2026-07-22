@@ -4,7 +4,9 @@ services:
     runtime: docker
     plan: starter
     region: frankfurt
+    rootDir: .
     dockerfilePath: ./Dockerfile
+    dockerContext: .
     healthCheckPath: /api/status
     disk:
       name: poll-data

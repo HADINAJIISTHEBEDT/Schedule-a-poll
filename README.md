@@ -116,7 +116,7 @@ POST /api/polls
 
 ## Deploy on Render
 
-1. Push this repo to GitHub (branch: `main`)
+1. Use the **`main`** branch (must contain `package.json` at the repo root)
 2. Go to [render.com](https://render.com) → **New** → **Blueprint**
 3. Connect your GitHub repo `HADINAJIISTHEBEDT/Schedule-a-poll`
 4. Render will read `render.yaml` and deploy automatically
@@ -124,17 +124,32 @@ POST /api/polls
 6. Connect WhatsApp via QR code
 
 **Important for Render:**
-- Use the **Starter** plan or higher (WhatsApp needs Chrome/Puppeteer)
+- Use **Docker** environment (not Node) — WhatsApp needs Chromium
+- **Root Directory must be blank** — do NOT set it to `src`
+- Use the **Starter** plan or higher
 - A **persistent disk** is configured for WhatsApp session data (`/app/data`)
-- After deploy, use your Render URL in the Android app: `https://your-app.onrender.com`
+
+### Fix: `ENOENT package.json` / `project/src/package.json`
+
+This error means Render is looking in the wrong folder. Fix it:
+
+| Setting | Correct value |
+|---------|----------------|
+| **Environment** | **Docker** |
+| **Root Directory** | *(leave blank)* |
+| **Branch** | `main` |
+| **Dockerfile Path** | `./Dockerfile` |
+
+If you created a **Node** service by mistake, delete it and redeploy with **Docker** or **Blueprint**.
 
 ### Manual Render setup (without Blueprint)
 
 | Setting | Value |
 |---------|-------|
-| Environment | Docker |
-| Build Command | (auto from Dockerfile) |
-| Start Command | `npm start` |
+| Environment | **Docker** |
+| Root Directory | *(blank — not `src`)* |
+| Branch | `main` |
+| Dockerfile Path | `./Dockerfile` |
 | Health Check | `/api/status` |
 | Disk | Mount `/app/data` (1 GB) |
 
