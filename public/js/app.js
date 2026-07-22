@@ -118,7 +118,7 @@ function renderChats() {
       state.connectionState === 'qr'
         ? 'Scan the QR code with your phone'
         : state.connectionState === 'authenticated' || state.connectionState === 'connecting'
-          ? 'Waiting for QR code...'
+          ? 'Syncing with WhatsApp...'
           : 'Connect WhatsApp first';
     html = `<p class="placeholder">${emptyMessage}</p>`;
     if (
@@ -244,7 +244,7 @@ function updateConnectionUI({ state: connState, qr, connectedInfo }) {
     disconnected: 'Disconnected',
     connecting: 'Connecting...',
     qr: 'Scan QR Code',
-    authenticated: 'Authenticating...',
+    authenticated: 'Syncing WhatsApp...',
     ready: connectedInfo ? `Connected as ${connectedInfo.pushname}` : 'Connected',
     auth_failure: 'Auth failed',
   };
@@ -388,31 +388,23 @@ async function connect() {
 function pollStatus(fast = false) {
   if (statusPollTimer) clearInterval(statusPollTimer);
 
-  const interval = fast ? 300 : 1000;
-  let polls = 0;
-  const maxPolls = fast ? 40 : 120;
-
   const tick = async () => {
     try {
       const res = await apiFetch('/api/status');
       const data = await res.json();
       updateConnectionUI(data);
-      polls++;
-      if (data.state === 'ready' || data.state === 'disconnected' || data.state === 'auth_failure') {
+      const waiting =
+        data.state === 'connecting' || data.state === 'qr' || data.state === 'authenticated';
+      if (!waiting) {
         clearInterval(statusPollTimer);
         statusPollTimer = null;
-      }
-      if (polls >= maxPolls && data.state === 'connecting') {
-        clearInterval(statusPollTimer);
-        statusPollTimer = null;
-        showToast('Taking longer than expected — tap Connect again', 'error');
       }
     } catch {
-      clearInterval(statusPollTimer);
-      statusPollTimer = null;
+      // keep polling through transient network errors
     }
   };
 
+  const interval = fast ? 500 : 1500;
   tick();
   statusPollTimer = setInterval(tick, interval);
 }

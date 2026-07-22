@@ -58,9 +58,94 @@ let chatsCacheTime = 0;
 let connectingSince = 0;
 let initInProgress = false;
 let warmupStarted = false;
+let readyCheckTimer = null;
 const CHATS_CACHE_TTL = 5 * 60 * 1000;
 const CONNECTING_TIMEOUT_MS = 45 * 1000;
 const QR_TARGET_MS = 10000;
+
+function stopReadyCheck() {
+  if (readyCheckTimer) {
+    clearInterval(readyCheckTimer);
+    readyCheckTimer = null;
+  }
+}
+
+async function readConnectedInfo(instance) {
+  try {
+    if (instance.info?.pushname) {
+      const info = instance.info;
+      return {
+        pushname: info.pushname,
+        phone: info.wid?.user,
+        platform: info.platform,
+      };
+    }
+  } catch {
+    // fall through to page evaluate
+  }
+
+  try {
+    return await instance.pupPage.evaluate(() => {
+      const conn = window.require('WAWebConnModel').Conn;
+      const wid =
+        window.require('WAWebUserPrefsMeUser').getMaybeMePnUser() ||
+        window.require('WAWebUserPrefsMeUser').getMaybeMeLidUser();
+      return {
+        pushname: conn?.pushname || wid?.user || 'Connected',
+        phone: wid?.user,
+        platform: conn?.platform,
+      };
+    });
+  } catch {
+    return { pushname: 'Connected' };
+  }
+}
+
+async function tryFinalizeReady(instance) {
+  if (!instance || connectionState === 'ready') return true;
+
+  try {
+    const waState = await instance.getState();
+    if (waState !== 'CONNECTED') return false;
+  } catch (err) {
+    console.error('Ready state check failed:', err.message);
+    return false;
+  }
+
+  connectionState = 'ready';
+  connectingSince = 0;
+  lastQr = null;
+  lastQrDataUrl = null;
+  connectedInfo = await readConnectedInfo(instance);
+  stopReadyCheck();
+  emit('ready', connectedInfo);
+  console.log('WhatsApp linked as', connectedInfo.pushname);
+  return true;
+}
+
+function startReadyCheck(instance) {
+  stopReadyCheck();
+  let attempts = 0;
+  const maxAttempts = 180;
+
+  const check = async () => {
+    if (!instance || connectionState === 'ready' || connectionState === 'disconnected') {
+      stopReadyCheck();
+      return;
+    }
+
+    attempts++;
+    await tryFinalizeReady(instance);
+
+    if (attempts >= maxAttempts) {
+      stopReadyCheck();
+      console.warn('Ready check timed out after scan — still syncing');
+    }
+  };
+
+  check();
+  readyCheckTimer = setInterval(check, 1000);
+}
 
 function formatChat(chat) {
   const name = chat.name || chat.id?.user || chat.id?._serialized || 'Unknown chat';
@@ -228,6 +313,9 @@ function emit(event, data) {
 }
 
 function getStatus() {
+  if (connectionState === 'authenticated' && client) {
+    tryFinalizeReady(client).catch(() => {});
+  }
   return {
     state: connectionState,
     qr: lastQrDataUrl,
@@ -299,9 +387,17 @@ function createClient() {
     connectionState = 'authenticated';
     lastQr = null;
     lastQrDataUrl = null;
+    startReadyCheck(instance);
+  });
+
+  instance.on('loading_screen', (percent) => {
+    if (percent >= 99) {
+      setTimeout(() => tryFinalizeReady(instance), 1500);
+    }
   });
 
   instance.on('ready', async () => {
+    stopReadyCheck();
     connectionState = 'ready';
     connectingSince = 0;
     lastQr = null;
@@ -322,6 +418,7 @@ function createClient() {
   });
 
   instance.on('disconnected', (reason) => {
+    stopReadyCheck();
     connectionState = 'disconnected';
     connectedInfo = null;
     client = null;
@@ -330,6 +427,7 @@ function createClient() {
   });
 
   instance.on('auth_failure', (msg) => {
+    stopReadyCheck();
     connectionState = 'auth_failure';
     connectingSince = 0;
     emit('auth_failure', msg);
@@ -402,6 +500,7 @@ async function initialize({ force = false, resetSession = false } = {}) {
 }
 
 async function disconnect({ preserveState = false } = {}) {
+  stopReadyCheck();
   if (client) {
     try {
       await client.destroy();
