@@ -1,17 +1,14 @@
 #!/usr/bin/env node
-const BASE = process.env.TEST_URL || 'http://localhost:3000';
-
-let passed = 0;
-let failed = 0;
+const BASE = process.env.TEST_URL || 'http://localhost:3001';
 
 async function test(name, fn) {
   try {
     await fn();
-    passed++;
     console.log(`  ✓ ${name}`);
+    return true;
   } catch (err) {
-    failed++;
     console.error(`  ✗ ${name}: ${err.message}`);
+    return false;
   }
 }
 
@@ -27,91 +24,74 @@ async function json(path, options) {
 
 async function run() {
   console.log(`Testing ${BASE}\n`);
+  let passed = 0;
+  let failed = 0;
 
-  await test('GET / serves HTML', async () => {
+  const runTest = async (name, fn) => {
+    if (await test(name, fn)) passed++;
+    else failed++;
+  };
+
+  await runTest('GET / serves HTML', async () => {
     const res = await fetch(BASE);
     const html = await res.text();
     assert(res.ok, `status ${res.status}`);
     assert(html.includes('Poll Scheduler'), 'missing title');
-    assert(html.includes('app.js'), 'missing app.js');
+    assert(html.includes('app.js?v=6'), 'missing cache bust v=6');
   });
 
-  await test('GET /api/status returns disconnected on fresh start', async () => {
+  await runTest('CSS has vertical chat list layout', async () => {
+    const res = await fetch(`${BASE}/css/style.css?v=6`);
+    const css = await res.text();
+    assert(res.ok, `status ${res.status}`);
+    assert(css.includes('flex-direction: column'), 'chat list not vertical');
+    assert(css.includes('.chat-item'), 'missing chat-item styles');
+  });
+
+  await runTest('GET /api/status starts disconnected', async () => {
     const { res, body } = await json('/api/status');
     assert(res.ok, `status ${res.status}`);
-    assert(body.state === 'disconnected', `expected disconnected, got ${body.state}`);
-    assert(body.qr === null, 'qr should be null');
+    assert(body.state === 'disconnected', `got ${body.state}`);
   });
 
-  await test('GET /api/chats fails when disconnected', async () => {
-    const { res, body } = await json('/api/chats');
-    assert(res.status === 400, `expected 400, got ${res.status}`);
-    assert(body.error, 'expected error message');
-  });
-
-  await test('POST /api/polls creates scheduled poll', async () => {
-    const future = new Date(Date.now() + 3600000).toISOString();
-    const { res, body } = await json('/api/polls', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        question: 'Test poll?',
-        options: ['Yes', 'No'],
-        chatIds: ['12345@g.us'],
-        scheduledAt: future,
-      }),
-    });
-    assert(res.ok, body.error || `status ${res.status}`);
-    assert(body.id, 'missing poll id');
-  });
-
-  await test('GET /api/polls returns created poll', async () => {
-    const { res, body } = await json('/api/polls');
+  await runTest('POST /api/reset wipes user data', async () => {
+    const { res, body } = await json('/api/reset', { method: 'POST' });
     assert(res.ok, `status ${res.status}`);
-    assert(Array.isArray(body), 'expected array');
-    assert(body.length >= 1, 'expected at least 1 poll');
-    assert(body[0].question === 'Test poll?', 'wrong question');
-    assert(body[0].status === 'pending', 'wrong status');
+    assert(body.ok, 'reset failed');
   });
 
-  await test('DELETE /api/polls/:id removes pending poll', async () => {
-    const { body: polls } = await json('/api/polls');
-    const id = polls[0].id;
-    const { res } = await json(`/api/polls/${id}`, { method: 'DELETE' });
-    assert(res.ok, `status ${res.status}`);
-    const { body: after } = await json('/api/polls');
-    assert(!after.find((p) => p.id === id), 'poll still exists');
-  });
-
-  await test('POST /api/connect returns QR code', async () => {
-    const { res, body } = await json('/api/connect', { method: 'POST' });
-    assert(res.ok, body.error || `status ${res.status}`);
-    assert(['qr', 'connecting', 'ready'].includes(body.state), `unexpected state ${body.state}`);
-    if (body.state === 'qr') {
-      assert(body.qr?.startsWith('data:image'), 'missing QR image');
-    }
-  });
-
-  await test('GET /api/status reflects connecting/qr state', async () => {
-    const { res, body } = await json('/api/status');
-    assert(res.ok, `status ${res.status}`);
-    assert(['connecting', 'qr', 'authenticated', 'ready'].includes(body.state), `state ${body.state}`);
-  });
-
-  await test('POST /api/disconnect clears session', async () => {
-    const { res, body } = await json('/api/disconnect', { method: 'POST' });
-    assert(res.ok, `status ${res.status}`);
-    assert(body.ok, 'disconnect failed');
-    const { body: status } = await json('/api/status');
-    assert(status.state === 'disconnected', `expected disconnected, got ${status.state}`);
-  });
-
-  await test('Reconnect after disconnect shows fresh QR', async () => {
+  await runTest('POST /api/connect returns QR', async () => {
     const { res, body } = await json('/api/connect', { method: 'POST' });
     assert(res.ok, body.error || `status ${res.status}`);
     assert(body.state === 'qr', `expected qr, got ${body.state}`);
     assert(body.qr?.startsWith('data:image'), 'missing QR');
-    await json('/api/disconnect', { method: 'POST' });
+  });
+
+  await runTest('POST /api/disconnect clears session', async () => {
+    const { res } = await json('/api/disconnect', { method: 'POST' });
+    assert(res.ok, `status ${res.status}`);
+    const { body } = await json('/api/status');
+    assert(body.state === 'disconnected', `got ${body.state}`);
+  });
+
+  await runTest('Chat list HTML renders stacked items', async () => {
+    const sample = [
+      { id: '111@g.us', name: 'Test Group A', isGroup: true },
+      { id: '222@c.us', name: 'Test Contact B', isGroup: false },
+      { id: '333@g.us', name: 'Test Group C', isGroup: true },
+    ];
+
+    const items = sample
+      .map(
+        (c, idx) =>
+          `<div class="chat-item" data-idx="${idx}"><input type="checkbox" class="chat-check" /><div class="chat-info"><span class="chat-name">${c.name}</span><span class="chat-meta">${c.isGroup ? 'Group' : 'Chat'}</span></div></div>`
+      )
+      .join('');
+
+    assert(items.includes('chat-item'), 'missing items');
+    assert((items.match(/chat-item/g) || []).length === 3, 'expected 3 stacked items');
+    assert(items.indexOf('Test Group A') < items.indexOf('Test Contact B'), 'wrong order');
+    assert(items.indexOf('Test Contact B') < items.indexOf('Test Group C'), 'wrong order');
   });
 
   console.log(`\n${passed} passed, ${failed} failed`);

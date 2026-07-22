@@ -69,7 +69,7 @@ function renderChats(term = '') {
   const dms = list.filter((c) => !c.isGroup);
 
   if (state.chats.length) {
-    els.chatSummary.textContent = `${state.chats.length} total · ${groups.length} groups · ${dms.length} chats`;
+    els.chatSummary.textContent = `${state.chats.length} contacts · ${groups.length} groups · ${dms.length} chats`;
   } else {
     els.chatSummary.textContent = state.loading ? 'Loading contacts...' : 'Connect WhatsApp to load contacts';
   }
@@ -91,33 +91,17 @@ function renderChats(term = '') {
   const shown = ordered.slice(0, state.visible);
   state.visibleChats = shown;
 
-  const item = (c, idx) => {
+  let html = '';
+  for (let i = 0; i < shown.length; i++) {
+    const c = shown[i];
     const sel = state.selected.has(c.id);
-    return `<div class="chat-item${sel ? ' selected' : ''}" data-idx="${idx}">
+    html += `<div class="chat-item${sel ? ' selected' : ''}" data-idx="${i}">
       <input type="checkbox" class="chat-check" ${sel ? 'checked' : ''} aria-label="${esc(c.name)}" />
       <div class="chat-info">
         <span class="chat-name">${esc(c.name)}</span>
         <span class="chat-meta">${c.isGroup ? 'Group' : 'Chat'}</span>
       </div>
     </div>`;
-  };
-
-  let html = '';
-  if (state.filter === 'all' && !term) {
-    const sg = shown.filter((c) => c.isGroup);
-    const sd = shown.filter((c) => !c.isGroup);
-    let idx = 0;
-    if (sg.length) {
-      html += `<div class="section-label">Groups (${groups.length})</div>`;
-      html += sg.map((c) => item(c, shown.indexOf(c))).join('');
-    }
-    if (sd.length) {
-      html += `<div class="section-label">Chats (${dms.length})</div>`;
-      html += sd.map((c) => item(c, shown.indexOf(c))).join('');
-    }
-    if (!html) html = shown.map((c, i) => item(c, i)).join('');
-  } else {
-    html = shown.map((c, i) => item(c, i)).join('');
   }
 
   if (ordered.length > state.visible) {

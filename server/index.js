@@ -6,7 +6,7 @@ const whatsapp = require('./whatsapp');
 const scheduler = require('./scheduler');
 
 const app = express();
-const PORT = Number(process.env.PORT) || 3000;
+const PORT = Number(process.env.PORT) || 3001;
 const HOST = process.env.HOST || '0.0.0.0';
 
 app.use(express.json());

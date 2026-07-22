@@ -294,8 +294,10 @@ input:focus {
 }
 
 .chat-list {
-  max-height: 55vh;
-  min-height: 120px;
+  display: flex;
+  flex-direction: column;
+  max-height: 60vh;
+  min-height: 200px;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   border: 1px solid var(--border);
@@ -305,14 +307,17 @@ input:focus {
 
 .chat-item {
   display: flex;
+  flex-direction: row;
   align-items: center;
+  width: 100%;
   gap: 12px;
-  padding: 12px;
+  padding: 14px 12px;
   cursor: pointer;
   border-bottom: 1px solid var(--border);
   transition: background 0.1s;
   -webkit-tap-highlight-color: transparent;
   user-select: none;
+  box-sizing: border-box;
 }
 
 .chat-item:last-child { border-bottom: none; }
