@@ -1,177 +1,42 @@
 const { Client, LocalAuth, Poll } = require('whatsapp-web.js');
 const qrcode = require('qrcode');
+const fs = require('fs');
 const path = require('path');
 const { humanLikeDelay, staggeredChatDelay, sleep, randomBetween } = require('./humanSend');
 
+const SESSION_PATH = path.join(__dirname, '..', 'data', 'whatsapp-session');
+const LEGACY_AUTH_PATH = path.join(__dirname, '..', '.wwebjs_auth');
+
+const CHROME_PATHS = [
+  process.env.PUPPETEER_EXECUTABLE_PATH,
+  '/usr/bin/chromium',
+  '/usr/local/bin/google-chrome',
+  '/usr/bin/google-chrome',
+  '/usr/bin/chromium-browser',
+].filter(Boolean);
+
 let client = null;
 let connectionState = 'disconnected';
-let lastQr = null;
 let lastQrDataUrl = null;
 let connectedInfo = null;
 let cachedChats = [];
-let cachedContacts = null;
 let chatsLoading = false;
 let chatsCacheTime = 0;
-const CHATS_CACHE_TTL = 5 * 60 * 1000;
+let initPromise = null;
+let qrShownThisSession = false;
 
-function formatChat(chat) {
-  const name = chat.name || chat.id?.user || chat.id?._serialized || 'Unknown chat';
-  return {
-    id: chat.id._serialized,
-    name,
-    isGroup: Boolean(chat.isGroup),
-    unreadCount: chat.unreadCount || 0,
-    lastMessage: chat.lastMessage?.body?.slice(0, 60) || '',
-  };
+function resolveChrome() {
+  for (const p of CHROME_PATHS) {
+    if (fs.existsSync(p)) return p;
+  }
+  return undefined;
 }
 
-function formatDirectChat(chat) {
-  return {
-    id: chat.id,
-    name: chat.name || 'Unknown chat',
-    isGroup: Boolean(chat.isGroup),
-    unreadCount: chat.unreadCount || 0,
-    lastMessage: chat.lastMessage || '',
-  };
-}
-
-async function fetchChatsDirect({ includeContacts = false } = {}) {
-  const result = await client.pupPage.evaluate((withContacts) => {
-    const collections = window.require('WAWebCollections');
-    const chats = collections.Chat.getModelsArray();
-    const seen = new Set();
-    const items = [];
-
-    const addItem = (id, name, isGroup, isReadOnly) => {
-      if (!id || seen.has(id) || isReadOnly) return;
-      seen.add(id);
-      items.push({ id, name, isGroup });
-    };
-
-    for (const chat of chats) {
-      const id = chat.id?._serialized || String(chat.id);
-      const name =
-        chat.formattedTitle ||
-        chat.name ||
-        chat.contact?.pushname ||
-        chat.contact?.name ||
-        (id.includes('@') ? id.split('@')[0] : id) ||
-        'Unknown';
-
-      const isGroup = Boolean(chat.groupMetadata) || id.endsWith('@g.us');
-      const isReadOnly = Boolean(chat.groupMetadata?.announce);
-      addItem(id, name, isGroup, isReadOnly);
+function clearSession() {
+  for (const dir of [SESSION_PATH, LEGACY_AUTH_PATH]) {
+    if (fs.existsSync(dir)) {
+      fs.rmSync(dir, { recursive: true, force: true });
     }
-
-    if (withContacts) {
-      const contacts = collections.Contact?.getModelsArray?.() || [];
-      for (const contact of contacts) {
-        const id = contact.id?._serialized || String(contact.id);
-        if (!id || id.endsWith('@g.us') || contact.isMe) continue;
-
-        const name =
-          contact.pushname ||
-          contact.name ||
-          contact.shortName ||
-          (id.includes('@') ? id.split('@')[0] : id) ||
-          'Unknown';
-
-        addItem(id, name, false, false);
-      }
-    }
-
-    return items;
-  }, includeContacts);
-
-  return result
-    .map((chat) => ({
-      id: chat.id,
-      name: chat.name || 'Unknown chat',
-      isGroup: Boolean(chat.isGroup),
-    }))
-    .sort((a, b) => {
-      if (a.isGroup !== b.isGroup) return a.isGroup ? -1 : 1;
-      return a.name.localeCompare(b.name);
-    });
-}
-
-function mergeChatLists(base, extra) {
-  const seen = new Set(base.map((c) => c.id));
-  const merged = [...base];
-  for (const item of extra) {
-    if (!seen.has(item.id)) {
-      seen.add(item.id);
-      merged.push(item);
-    }
-  }
-  return merged.sort((a, b) => {
-    if (a.isGroup !== b.isGroup) return a.isGroup ? -1 : 1;
-    return a.name.localeCompare(b.name);
-  });
-}
-
-async function fetchAndCacheChats({ refresh = false, includeContacts = false } = {}) {
-  if (!client || connectionState !== 'ready') {
-    throw new Error('WhatsApp is not connected');
-  }
-
-  const cacheValid =
-    !refresh &&
-    cachedChats.length > 0 &&
-    Date.now() - chatsCacheTime < CHATS_CACHE_TTL &&
-    (!includeContacts || cachedContacts);
-
-  if (cacheValid) {
-    return includeContacts ? mergeChatLists(cachedChats, cachedContacts) : cachedChats;
-  }
-
-  let lastError = null;
-
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    try {
-      cachedChats = await fetchChatsDirect({ includeContacts: false });
-      chatsCacheTime = Date.now();
-
-      if (includeContacts) {
-        cachedContacts = (await fetchChatsDirect({ includeContacts: true })).filter((c) => !c.isGroup);
-        return mergeChatLists(cachedChats, cachedContacts);
-      }
-
-      return cachedChats;
-    } catch (err) {
-      lastError = err;
-      console.error(`Chat fetch attempt ${attempt}/2 failed:`, err.message);
-      if (attempt < 2) {
-        await new Promise((r) => setTimeout(r, 1000));
-      }
-    }
-  }
-
-  if (cachedChats.length > 0) {
-    return includeContacts && cachedContacts
-      ? mergeChatLists(cachedChats, cachedContacts)
-      : cachedChats;
-  }
-
-  throw lastError || new Error('Failed to load chats. Try clicking Refresh.');
-}
-
-const eventListeners = {
-  qr: [],
-  ready: [],
-  disconnected: [],
-  auth_failure: [],
-};
-
-function on(event, handler) {
-  if (eventListeners[event]) {
-    eventListeners[event].push(handler);
-  }
-}
-
-function emit(event, data) {
-  if (eventListeners[event]) {
-    eventListeners[event].forEach((handler) => handler(data));
   }
 }
 
@@ -180,105 +45,98 @@ function getStatus() {
     state: connectionState,
     qr: lastQrDataUrl,
     connectedInfo,
+    chatCount: cachedChats.length,
+    chatsLoading,
   };
 }
 
-async function initialize() {
-  if (client) return;
+function isReady() {
+  return connectionState === 'ready' && client !== null;
+}
 
-  client = new Client({
-    authStrategy: new LocalAuth({
-      dataPath: path.join(__dirname, '..', 'data', 'whatsapp-session'),
-    }),
-    webVersionCache: {
-      type: 'remote',
-      remotePath:
-        'https://raw.githubusercontent.com/wwebjs/whatsapp-web.js/main/web-version.json',
+async function fetchChatsDirect() {
+  await client.pupPage.waitForFunction(
+    () => {
+      try {
+        return window.require('WAWebCollections').Chat.getModelsArray().length > 0;
+      } catch {
+        return false;
+      }
     },
-    puppeteer: {
-      headless: true,
-      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-        '--single-process',
-        '--no-zygote',
-      ],
-    },
+    { timeout: 90000, polling: 2000 }
+  ).catch(() => {
+    console.log('Chat store wait timed out — trying anyway');
   });
 
-  client.on('qr', async (qr) => {
-    connectionState = 'qr';
-    lastQr = qr;
-    lastQrDataUrl = await qrcode.toDataURL(qr);
-    emit('qr', lastQrDataUrl);
-  });
+  const items = await client.pupPage.evaluate(() => {
+    const collections = window.require('WAWebCollections');
+    const chats = collections.Chat.getModelsArray();
+    const seen = new Set();
+    const out = [];
 
-  client.on('authenticated', () => {
-    connectionState = 'authenticated';
-    lastQr = null;
-    lastQrDataUrl = null;
-  });
+    for (const chat of chats) {
+      const id = chat.id?._serialized || String(chat.id);
+      if (!id || seen.has(id)) continue;
+      // Chat history only — skip broadcasts, status, newsletters
+      if (id.includes('@broadcast') || id.includes('status@')) continue;
 
-  client.on('ready', async () => {
-    connectionState = 'ready';
-    lastQr = null;
-    lastQrDataUrl = null;
+      const isGroup = Boolean(chat.groupMetadata) || id.endsWith('@g.us');
+      const isAnnounceOnly = Boolean(chat.groupMetadata?.announce);
+      if (isAnnounceOnly) continue;
 
-    try {
-      const info = client.info;
-      connectedInfo = {
-        pushname: info.pushname,
-        phone: info.wid?.user,
-        platform: info.platform,
-      };
-    } catch {
-      connectedInfo = { pushname: 'Connected' };
+      seen.add(id);
+      const name =
+        chat.formattedTitle ||
+        chat.name ||
+        chat.contact?.pushname ||
+        chat.contact?.name ||
+        (id.includes('@') ? id.split('@')[0] : id) ||
+        'Unknown';
+
+      out.push({ id, name, isGroup });
     }
 
-    emit('ready', connectedInfo);
+    return out;
   });
 
-  client.on('disconnected', (reason) => {
-    connectionState = 'disconnected';
-    connectedInfo = null;
-    client = null;
-    emit('disconnected', reason);
-  });
-
-  client.on('auth_failure', (msg) => {
-    connectionState = 'auth_failure';
-    emit('auth_failure', msg);
-  });
-
-  connectionState = 'connecting';
-  await client.initialize();
+  return items
+    .map((c) => ({ id: c.id, name: c.name || 'Unknown', isGroup: Boolean(c.isGroup) }))
+    .sort((a, b) => {
+      if (a.isGroup !== b.isGroup) return a.isGroup ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
 }
 
-async function disconnect() {
-  if (client) {
-    await client.destroy();
-    client = null;
+async function loadAndCacheChats() {
+  if (!isReady()) throw new Error('WhatsApp is not connected');
+
+  let lastError = null;
+  for (let attempt = 1; attempt <= 10; attempt++) {
+    try {
+      if (attempt > 1) await sleep(3000 * attempt);
+      const chats = await fetchChatsDirect();
+      if (chats.length > 0) {
+        cachedChats = chats;
+        chatsCacheTime = Date.now();
+        console.log(`Loaded ${chats.length} chats (attempt ${attempt})`);
+        return cachedChats;
+      }
+      console.log(`Chat attempt ${attempt}: 0 chats`);
+    } catch (err) {
+      lastError = err;
+      console.error(`Chat load ${attempt}/10:`, err.message);
+    }
   }
-  connectionState = 'disconnected';
-  connectedInfo = null;
-  cachedChats = [];
-  cachedContacts = null;
-  chatsCacheTime = 0;
-  lastQr = null;
-  lastQrDataUrl = null;
+
+  if (cachedChats.length > 0) return cachedChats;
+  throw lastError || new Error('No chats loaded yet — wait a moment and tap Refresh');
 }
 
-async function getChats({ refresh = false, includeContacts = false } = {}) {
-  if (!client || connectionState !== 'ready') {
-    throw new Error('WhatsApp is not connected');
-  }
+async function getChats({ refresh = false } = {}) {
+  if (!isReady()) throw new Error('WhatsApp is not connected');
 
-  if (!refresh && cachedChats.length > 0) {
-    return cachedChats;
-  }
+  const cacheValid = !refresh && cachedChats.length > 0 && Date.now() - chatsCacheTime < 5 * 60 * 1000;
+  if (cacheValid) return cachedChats;
 
   if (chatsLoading) {
     await new Promise((resolve) => {
@@ -287,75 +145,187 @@ async function getChats({ refresh = false, includeContacts = false } = {}) {
           clearInterval(check);
           resolve();
         }
-      }, 200);
+      }, 300);
     });
     if (cachedChats.length > 0) return cachedChats;
   }
 
   chatsLoading = true;
   try {
-    return await fetchAndCacheChats({ refresh, includeContacts });
+    return await loadAndCacheChats();
   } finally {
     chatsLoading = false;
   }
 }
 
-async function sendPollToChats({
-  question,
-  options,
-  chatIds,
-  allowMultiple = false,
-  humanDelayMin = 3,
-  humanDelayMax = 12,
-}) {
-  if (!client || connectionState !== 'ready') {
-    throw new Error('WhatsApp is not connected');
-  }
-
-  if (!options || options.length < 2) {
-    throw new Error('A poll needs at least 2 options');
-  }
-
-  if (options.length > 12) {
-    throw new Error('WhatsApp polls support up to 12 options');
-  }
-
-  const poll = new Poll(question, options, {
-    allowMultipleAnswers: allowMultiple,
+function setupClientEvents() {
+  client.on('qr', async (qr) => {
+    qrShownThisSession = true;
+    connectionState = 'qr';
+    lastQrDataUrl = await qrcode.toDataURL(qr);
+    console.log('QR code ready — scan with your phone');
   });
 
+  client.on('authenticated', () => {
+    connectionState = 'authenticated';
+    lastQrDataUrl = null;
+    console.log('QR scanned, authenticating...');
+  });
+
+  client.on('ready', () => {
+    if (!qrShownThisSession) {
+      console.error('Connected without QR scan — forcing disconnect');
+      disconnect().catch(() => {});
+      return;
+    }
+
+    connectionState = 'ready';
+    lastQrDataUrl = null;
+
+    try {
+      const info = client.info;
+      connectedInfo = { pushname: info.pushname, phone: info.wid?.user };
+    } catch {
+      connectedInfo = { pushname: 'Connected' };
+    }
+
+    console.log(`WhatsApp ready as ${connectedInfo.pushname}`);
+
+    chatsLoading = true;
+    loadAndCacheChats()
+      .then((chats) => console.log(`Preloaded ${chats.length} chats`))
+      .catch((err) => console.error('Chat preload failed:', err.message))
+      .finally(() => { chatsLoading = false; });
+
+    listeners.ready.forEach((fn) => fn());
+  });
+
+  client.on('disconnected', () => {
+    connectionState = 'disconnected';
+    connectedInfo = null;
+    client = null;
+    cachedChats = [];
+    chatsCacheTime = 0;
+    lastQrDataUrl = null;
+    initPromise = null;
+    qrShownThisSession = false;
+  });
+
+  client.on('auth_failure', () => {
+    connectionState = 'auth_failure';
+    lastQrDataUrl = null;
+    initPromise = null;
+    qrShownThisSession = false;
+  });
+}
+
+async function initialize() {
+  if (initPromise) return initPromise;
+
+  initPromise = (async () => {
+    await disconnect();
+    clearSession();
+
+    qrShownThisSession = false;
+    lastQrDataUrl = null;
+    connectedInfo = null;
+    cachedChats = [];
+    chatsCacheTime = 0;
+    connectionState = 'connecting';
+
+    const clientId = `poll-${Date.now()}`;
+
+    client = new Client({
+      authStrategy: new LocalAuth({ dataPath: SESSION_PATH, clientId }),
+      webVersionCache: {
+        type: 'remote',
+        remotePath: 'https://raw.githubusercontent.com/wwebjs/whatsapp-web.js/main/web-version.json',
+      },
+      puppeteer: {
+        headless: true,
+        executablePath: resolveChrome(),
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-gpu',
+        ],
+      },
+    });
+
+    setupClientEvents();
+    await client.initialize();
+  })();
+
+  try {
+    await initPromise;
+  } catch (err) {
+    initPromise = null;
+    throw err;
+  }
+}
+
+async function waitForQrOrReady(timeoutMs = 30000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const status = getStatus();
+    if (status.state === 'qr' && status.qr) return status;
+    if (status.state === 'ready' && qrShownThisSession) return status;
+    if (status.state === 'auth_failure' || status.state === 'disconnected') return status;
+    await sleep(500);
+  }
+  return getStatus();
+}
+
+async function disconnect() {
+  initPromise = null;
+  const activeClient = client;
+  client = null;
+
+  if (activeClient) {
+    try {
+      await activeClient.logout();
+      console.log('Logged out from WhatsApp');
+    } catch (err) {
+      console.log('Logout:', err.message);
+    }
+    try {
+      await activeClient.destroy();
+    } catch (err) {
+      console.log('Destroy:', err.message);
+    }
+  }
+
+  clearSession();
+  connectionState = 'disconnected';
+  connectedInfo = null;
+  cachedChats = [];
+  chatsCacheTime = 0;
+  chatsLoading = false;
+  lastQrDataUrl = null;
+  qrShownThisSession = false;
+}
+
+async function sendPollToChats({ question, options, chatIds, allowMultiple = false, humanDelayMin = 3, humanDelayMax = 12 }) {
+  if (!isReady()) throw new Error('WhatsApp is not connected');
+  if (!options || options.length < 2) throw new Error('A poll needs at least 2 options');
+  if (options.length > 12) throw new Error('WhatsApp polls support up to 12 options');
+
+  const poll = new Poll(question, options, { allowMultipleAnswers: allowMultiple });
   const results = [];
 
   for (let i = 0; i < chatIds.length; i++) {
     const chatId = chatIds[i];
-
     try {
-      await staggeredChatDelay(i, {
-        minSeconds: humanDelayMin,
-        maxSeconds: humanDelayMax,
-      });
-
+      await staggeredChatDelay(i, { minSeconds: humanDelayMin, maxSeconds: humanDelayMax });
       let chat = null;
-      try {
-        chat = await client.getChatById(chatId);
-      } catch (err) {
-        console.warn(`getChatById failed for ${chatId}:`, err.message);
-      }
-
+      try { chat = await client.getChatById(chatId); } catch { /* ignore */ }
       if (chat) {
-        await humanLikeDelay(chat, question, {
-          minSeconds: humanDelayMin,
-          maxSeconds: humanDelayMax,
-        });
+        await humanLikeDelay(chat, question, { minSeconds: humanDelayMin, maxSeconds: humanDelayMax });
       } else {
         await sleep(randomBetween(humanDelayMin * 1000, humanDelayMax * 1000));
       }
-
-      await client.sendMessage(chatId, poll, {
-        sendSeen: false,
-        waitUntilMsgSent: true,
-      });
-
+      await client.sendMessage(chatId, poll, { sendSeen: false, waitUntilMsgSent: true });
       results.push({ chatId, success: true });
     } catch (err) {
       results.push({ chatId, success: false, error: err.message });
@@ -366,17 +336,18 @@ async function sendPollToChats({
   if (failed.length === results.length) {
     throw new Error(failed.map((f) => f.error).join('; '));
   }
-
   return results;
 }
 
-function isReady() {
-  return connectionState === 'ready' && client !== null;
+const listeners = { ready: [] };
+function on(event, handler) {
+  if (listeners[event]) listeners[event].push(handler);
 }
 
 module.exports = {
   initialize,
   disconnect,
+  waitForQrOrReady,
   getStatus,
   getChats,
   sendPollToChats,

@@ -109,6 +109,10 @@ module.exports = {
   deletePoll(id) {
     return deletePoll.run(id);
   },
+
+  wipeAll() {
+    db.exec('DELETE FROM scheduled_polls');
+  },
 };
 
 function formatPoll(row) {

@@ -3,115 +3,140 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <title>Poll Scheduler — WhatsApp</title>
-  <link rel="stylesheet" href="/css/style.css" />
+  <style>
+    /* Critical: force contacts visible on mobile (fixes invisible list bug) */
+    #chatList {
+      display: block !important;
+      max-height: 60vh;
+      min-height: 220px;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      background: #1a2730;
+      border: 1px solid #2a3942;
+      border-radius: 8px;
+    }
+    .chat-item {
+      display: flex !important;
+      flex-direction: row !important;
+      align-items: center !important;
+      width: 100% !important;
+      gap: 14px;
+      padding: 14px 16px;
+      border-bottom: 1px solid #2a3942;
+      min-height: 56px;
+      box-sizing: border-box;
+      cursor: pointer;
+    }
+    .chat-name {
+      display: block !important;
+      color: #e9edef !important;
+      font-size: 16px !important;
+      font-weight: 600 !important;
+    }
+    .tick-box {
+      width: 28px;
+      height: 28px;
+      min-width: 28px;
+      border: 2px solid #00a884;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      color: #fff;
+      flex-shrink: 0;
+    }
+    .chat-item.selected .tick-box { background: #00a884; }
+    #versionBanner {
+      background: #00a884;
+      color: #fff;
+      text-align: center;
+      padding: 8px;
+      font-size: 13px;
+      font-weight: 600;
+    }
+  </style>
+  <link rel="stylesheet" href="/css/style.css?v=8" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
 </head>
 <body>
+  <div id="versionBanner">✓ Version 8 — tap contacts below to select</div>
   <div class="app">
     <header class="header">
       <div class="header-brand">
         <div class="logo">📊</div>
         <div>
           <h1>Poll Scheduler</h1>
-          <p class="subtitle">Schedule native WhatsApp polls — sent naturally</p>
+          <p class="subtitle">Schedule native WhatsApp polls</p>
         </div>
       </div>
-      <div class="connection-panel" id="connectionPanel">
-        <button type="button" class="btn btn-ghost btn-sm" id="serverSettingsBtn" title="Server settings">⚙️</button>
+      <div class="connection-panel">
         <span class="status-dot" id="statusDot"></span>
         <span id="statusText">Disconnected</span>
         <button class="btn btn-sm" id="connectBtn">Connect WhatsApp</button>
       </div>
     </header>
 
-    <div class="qr-overlay hidden" id="serverOverlay">
-      <div class="qr-card">
-        <h2>Server Connection</h2>
-        <p>Enter the address where the app is running (your PC or server).</p>
-        <p class="hint-block">Example: <code>http://192.168.1.5:3000</code></p>
-        <input type="url" id="serverUrlInput" placeholder="http://192.168.1.5:3000" />
-        <div class="form-actions" style="margin-top:16px">
-          <button type="button" class="btn btn-primary" id="saveServerBtn">Save & Connect</button>
-          <button type="button" class="btn btn-ghost" id="closeServerBtn">Cancel</button>
-        </div>
-      </div>
-    </div>
-
     <div class="qr-overlay hidden" id="qrOverlay">
       <div class="qr-card">
         <h2>Scan with WhatsApp</h2>
-        <p>Works with <strong>WhatsApp</strong> and <strong>WhatsApp Business</strong></p>
-        <div class="qr-frame">
-          <img id="qrImage" alt="QR Code" />
-        </div>
-        <ol class="qr-steps">
-          <li>Open WhatsApp on your phone</li>
-          <li>Go to <em>Linked Devices</em> → <em>Link a Device</em></li>
-          <li>Scan this QR code</li>
-        </ol>
+        <p>WhatsApp → Linked Devices → Link a Device</p>
+        <div class="qr-frame"><img id="qrImage" alt="QR Code" /></div>
         <button class="btn btn-ghost" id="closeQrBtn">Close</button>
       </div>
     </div>
 
     <main class="main">
-      <section class="card create-poll">
-        <h2>Create Poll</h2>
+      <section class="card" id="chatSelectSection">
+        <h2>Select Chats to Send Poll</h2>
+        <div class="chat-filters">
+          <button type="button" class="chat-filter active" data-filter="all">All</button>
+          <button type="button" class="chat-filter" data-filter="groups">Groups</button>
+          <button type="button" class="chat-filter" data-filter="chats">Chats</button>
+        </div>
+        <div class="chat-search">
+          <input type="text" id="chatSearch" placeholder="Search chats..." />
+          <button type="button" class="btn btn-ghost btn-sm" id="refreshChatsBtn">Refresh</button>
+        </div>
+        <p class="chat-summary" id="chatSummary">Connect WhatsApp to load your chats</p>
+        <div class="chat-list" id="chatList">
+          <p class="placeholder">Click Connect WhatsApp above</p>
+        </div>
+        <p class="selected-count" id="selectedCount">0 chats selected</p>
+      </section>
 
+      <section class="card">
+        <h2>Create Poll</h2>
         <div class="form-group">
           <label for="question">Poll Question</label>
           <input type="text" id="question" placeholder="What should we do this weekend?" maxlength="255" />
         </div>
-
         <div class="form-group">
-          <label>Poll Options <span class="hint">(2–12 options)</span></label>
+          <label>Poll Options <span class="hint">(2–12)</span></label>
           <div id="optionsList" class="options-list"></div>
           <button type="button" class="btn btn-ghost btn-sm" id="addOptionBtn">+ Add option</button>
         </div>
-
-        <div class="form-row">
-          <label class="checkbox-label">
-            <input type="checkbox" id="allowMultiple" />
-            Allow multiple answers
-          </label>
-        </div>
-
-        <div class="form-group">
-          <label>Select Chats</label>
-          <div class="chat-filters">
-            <button type="button" class="chat-filter active" data-filter="all">All</button>
-            <button type="button" class="chat-filter" data-filter="groups">Groups</button>
-            <button type="button" class="chat-filter" data-filter="contacts">Contacts</button>
-          </div>
-          <div class="chat-search">
-            <input type="text" id="chatSearch" placeholder="Search groups or contacts..." />
-            <button type="button" class="btn btn-ghost btn-sm" id="refreshChatsBtn">Refresh</button>
-          </div>
-          <p class="chat-summary" id="chatSummary"></p>
-          <div class="chat-list" id="chatList">
-            <p class="placeholder">Connect WhatsApp to load your chats</p>
-          </div>
-          <p class="selected-count" id="selectedCount">0 chats selected</p>
-        </div>
-
+        <label class="checkbox-label">
+          <input type="checkbox" id="allowMultiple" /> Allow multiple answers
+        </label>
         <div class="form-row two-col">
           <div class="form-group">
-            <label for="scheduledAt">Schedule Date & Time</label>
+            <label for="scheduledAt">Schedule</label>
             <input type="datetime-local" id="scheduledAt" />
           </div>
           <div class="form-group">
-            <label>Human-like delay <span class="hint">(seconds between chats)</span></label>
+            <label>Delay between chats (sec)</label>
             <div class="range-row">
               <input type="number" id="delayMin" value="3" min="1" max="60" />
               <span>to</span>
               <input type="number" id="delayMax" value="12" min="1" max="120" />
-              <span>sec</span>
             </div>
           </div>
         </div>
-
         <div class="form-actions">
           <button type="button" class="btn btn-primary" id="scheduleBtn">Schedule Poll</button>
           <button type="button" class="btn btn-accent" id="sendNowBtn">Send Now</button>
@@ -132,7 +157,7 @@
     <div class="toast hidden" id="toast"></div>
   </div>
 
-  <script src="/js/config.js"></script>
-  <script src="/js/app.js"></script>
+  <script src="/js/config.js?v=8"></script>
+  <script src="/js/app.js?v=8"></script>
 </body>
 </html>

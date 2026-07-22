@@ -1,6 +1,9 @@
 FROM node:20-bookworm-slim
 
 RUN apt-get update && apt-get install -y \
+    python3 \
+    make \
+    g++ \
     chromium \
     ca-certificates \
     fonts-liberation \
@@ -37,4 +40,4 @@ RUN node scripts/patch-whatsapp.js
 RUN mkdir -p /app/data
 
 EXPOSE 3000
-CMD ["npm", "start"]
+CMD ["node", "server/index.js"]
