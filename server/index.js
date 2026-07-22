@@ -100,7 +100,8 @@ app.get('/api/chats/search', async (req, res) => {
     res.json(chats);
   } catch (err) {
     console.error('GET /api/chats/search error:', err.message);
-    res.status(400).json({ error: err.message || 'Search failed' });
+    const status = /timed out/i.test(err.message) ? 504 : 400;
+    res.status(status).json({ error: err.message || 'Search failed' });
   }
 });
 

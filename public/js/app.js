@@ -440,7 +440,14 @@ async function searchChats(query) {
     if (els.chatSearch.value.trim() === term) {
       state.searchResults = [];
       const message = err.message || 'Search failed';
-      showToast(message.includes('JSON') ? 'Search failed — try again in a few seconds' : message, 'error');
+      showToast(
+        /502|failed|timed out/i.test(message)
+          ? 'Search failed — wait a moment and try again'
+          : message.includes('JSON')
+            ? 'Search failed — try again in a few seconds'
+            : message,
+        'error'
+      );
     }
   } finally {
     state.searching = false;

@@ -68,6 +68,16 @@ const CHATS_CACHE_TTL = 5 * 60 * 1000;
 const FATAL_WA_STATES = new Set(['UNPAIRED', 'UNPAIRED_IDLE', 'DISCONNECTED', 'LOGOUT']);
 const CONNECTING_TIMEOUT_MS = 45 * 1000;
 const QR_TARGET_MS = 10000;
+const SEARCH_TIMEOUT_MS = 25000;
+
+function withTimeout(promise, ms, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      setTimeout(() => reject(new Error(`${label} timed out — try again`)), ms);
+    }),
+  ]);
+}
 
 function stopKeepalive() {
   if (keepaliveTimer) {
@@ -223,7 +233,7 @@ async function tryFinalizeReady(instance) {
   startKeepalive(instance);
   emit('ready', connectedInfo);
   console.log('WhatsApp linked as', connectedInfo.pushname);
-  fetchAndCacheChats({ refresh: false, includeContacts: true }).catch((err) => {
+  fetchAndCacheChats({ refresh: false, includeContacts: false }).catch((err) => {
     console.error('Chat cache warmup failed:', err.message);
   });
   return true;
@@ -334,6 +344,76 @@ async function fetchChatsDirect({ includeContacts = false } = {}) {
     });
 }
 
+async function searchChatsDirect(term, filter = 'all', includeContacts = true) {
+  if (!client?.pupPage) {
+    throw new Error('WhatsApp browser is not available');
+  }
+
+  return withTimeout(
+    client.pupPage.evaluate(
+      (searchTerm, chatFilter, withContacts) => {
+        const collections = window.require('WAWebCollections');
+        const seen = new Set();
+        const results = [];
+        const needle = searchTerm.toLowerCase();
+        const limit = 50;
+
+        const tryAdd = (id, name, isGroup) => {
+          if (!id || seen.has(id) || results.length >= limit) return;
+          if (chatFilter === 'groups' && !isGroup) return;
+          if (chatFilter === 'contacts' && isGroup) return;
+          const label = (name || '').toLowerCase();
+          if (!label.includes(needle)) return;
+          seen.add(id);
+          results.push({ id, name: name || 'Unknown', isGroup });
+        };
+
+        for (const chat of collections.Chat.getModelsArray()) {
+          if (results.length >= limit) break;
+          const id = chat.id?._serialized || String(chat.id);
+          const name =
+            chat.formattedTitle ||
+            chat.name ||
+            chat.contact?.pushname ||
+            chat.contact?.name ||
+            (id.includes('@') ? id.split('@')[0] : id) ||
+            'Unknown';
+          const isGroup = Boolean(chat.groupMetadata) || id.endsWith('@g.us');
+          const isReadOnly = Boolean(chat.groupMetadata?.announce);
+          if (isReadOnly) continue;
+          tryAdd(id, name, isGroup);
+        }
+
+        if (withContacts && results.length < limit) {
+          const contacts = collections.Contact?.getModelsArray?.() || [];
+          for (const contact of contacts) {
+            if (results.length >= limit) break;
+            const id = contact.id?._serialized || String(contact.id);
+            if (!id || id.endsWith('@g.us') || contact.isMe) continue;
+            const name =
+              contact.pushname ||
+              contact.name ||
+              contact.shortName ||
+              (id.includes('@') ? id.split('@')[0] : id) ||
+              'Unknown';
+            tryAdd(id, name, false);
+          }
+        }
+
+        return results.sort((a, b) => {
+          if (a.isGroup !== b.isGroup) return a.isGroup ? -1 : 1;
+          return a.name.localeCompare(b.name);
+        });
+      },
+      term,
+      filter,
+      includeContacts
+    ),
+    SEARCH_TIMEOUT_MS,
+    'Search'
+  );
+}
+
 function mergeChatLists(base, extra) {
   const seen = new Set(base.map((c) => c.id));
   const merged = [...base];
@@ -347,6 +427,22 @@ function mergeChatLists(base, extra) {
     if (a.isGroup !== b.isGroup) return a.isGroup ? -1 : 1;
     return a.name.localeCompare(b.name);
   });
+}
+
+function searchCachedChats(term, filter, includeContacts) {
+  let pool = includeContacts && cachedContacts
+    ? mergeChatLists(cachedChats, cachedContacts)
+    : cachedChats;
+
+  if (filter === 'groups') {
+    pool = pool.filter((c) => c.isGroup);
+  } else if (filter === 'contacts') {
+    pool = pool.filter((c) => !c.isGroup);
+  }
+
+  return pool
+    .filter((c) => c.name.toLowerCase().includes(term))
+    .slice(0, 50);
 }
 
 async function fetchAndCacheChats({ refresh = false, includeContacts = false } = {}) {
@@ -536,7 +632,7 @@ function createClient() {
 
     startKeepalive(instance);
     emit('ready', connectedInfo);
-    fetchAndCacheChats({ refresh: false, includeContacts: true }).catch((err) => {
+    fetchAndCacheChats({ refresh: false, includeContacts: false }).catch((err) => {
       console.error('Chat cache warmup failed:', err.message);
     });
   });
@@ -670,9 +766,9 @@ async function searchChats({ query = '', filter = 'all', includeContacts = true 
     throw new Error('WhatsApp is not connected');
   }
 
-  const fullyReady = await isClientFullyReady(client);
-  if (!fullyReady) {
-    throw new Error('WhatsApp is still syncing — wait a few seconds and try again');
+  const connected = await isSessionConnected(client);
+  if (!connected) {
+    throw new Error('WhatsApp is not connected');
   }
 
   const term = query.trim().toLowerCase();
@@ -681,34 +777,14 @@ async function searchChats({ query = '', filter = 'all', includeContacts = true 
   }
 
   try {
-    if (cachedChats.length === 0) {
-      await fetchAndCacheChats({ refresh: false, includeContacts: false });
-    }
-
-    if (includeContacts && !cachedContacts) {
-      try {
-        cachedContacts = (await fetchChatsDirect({ includeContacts: true })).filter((c) => !c.isGroup);
-      } catch (err) {
-        console.error('Contact search load failed:', err.message);
-      }
-    }
+    return await searchChatsDirect(term, filter, includeContacts);
   } catch (err) {
-    throw new Error(err.message || 'Could not load chats for search');
+    console.error('Direct search failed:', err.message);
+    if (cachedChats.length > 0) {
+      return searchCachedChats(term, filter, includeContacts);
+    }
+    throw new Error(err.message || 'Search failed — try again in a few seconds');
   }
-
-  let pool = includeContacts && cachedContacts
-    ? mergeChatLists(cachedChats, cachedContacts)
-    : cachedChats;
-
-  if (filter === 'groups') {
-    pool = pool.filter((c) => c.isGroup);
-  } else if (filter === 'contacts') {
-    pool = pool.filter((c) => !c.isGroup);
-  }
-
-  return pool
-    .filter((c) => c.name.toLowerCase().includes(term))
-    .slice(0, 50);
 }
 
 async function getChats({ refresh = false, includeContacts = false } = {}) {
