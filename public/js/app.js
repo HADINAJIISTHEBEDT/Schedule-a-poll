@@ -18,6 +18,7 @@ const els = {
   connectBtn: $('#connectBtn'),
   qrOverlay: $('#qrOverlay'),
   qrImage: $('#qrImage'),
+  qrLoading: $('#qrLoading'),
   closeQrBtn: $('#closeQrBtn'),
   question: $('#question'),
   optionsList: $('#optionsList'),
@@ -188,10 +189,19 @@ function toLocalDatetime(date) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
+function showQrLoading() {
+  els.qrOverlay.classList.remove('hidden');
+  if (els.qrLoading) els.qrLoading.classList.remove('hidden');
+  if (els.qrImage) els.qrImage.classList.add('hidden');
+  if (els.qrPanel) els.qrPanel.classList.remove('hidden');
+}
+
 function showQrOverlay(qr) {
   if (!qr) return;
   lastQrUrl = qr;
+  if (els.qrLoading) els.qrLoading.classList.add('hidden');
   els.qrImage.src = qr;
+  els.qrImage.classList.remove('hidden');
   els.qrOverlay.classList.remove('hidden');
   if (els.qrInlineImage) els.qrInlineImage.src = qr;
   if (els.qrPanel) els.qrPanel.classList.remove('hidden');
@@ -223,6 +233,10 @@ function updateConnectionUI({ state: connState, qr, connectedInfo }) {
   } else if (connState === 'ready') {
     hideQrOverlay();
   } else if (connState === 'connecting' || connState === 'authenticated') {
+    els.qrOverlay.classList.remove('hidden');
+    if (connState === 'connecting' && !qr && !lastQrUrl) {
+      showQrLoading();
+    }
     if (lastQrUrl && els.qrInlineImage) {
       els.qrInlineImage.src = lastQrUrl;
       if (els.qrPanel) els.qrPanel.classList.remove('hidden');
@@ -252,7 +266,7 @@ async function fetchStatus() {
     const data = await res.json();
     updateConnectionUI(data);
     if (data.state === 'connecting' || data.state === 'qr' || data.state === 'authenticated') {
-      pollStatus();
+      pollStatus(true);
     }
   } catch {
     updateConnectionUI({ state: 'disconnected' });
@@ -266,7 +280,6 @@ async function connect() {
     state.connectInFlight = true;
     els.connectBtn.disabled = true;
     els.connectBtn.textContent = 'Connecting...';
-    showToast('Starting WhatsApp connection...');
 
     const status = await apiFetch('/api/status').then((r) => r.json());
 
@@ -285,9 +298,13 @@ async function connect() {
     if (status.state === 'qr' && status.qr) {
       updateConnectionUI(status);
       showToast('Scan the QR code with your phone');
-      pollStatus();
+      pollStatus(true);
       return;
     }
+
+    showQrLoading();
+    updateConnectionUI({ state: 'connecting' });
+    pollStatus(true);
 
     const stuckConnecting = status.state === 'connecting' && !status.qr;
     const connectRes = await apiFetch('/api/connect', {
@@ -298,7 +315,6 @@ async function connect() {
     let connectData = await connectRes.json();
 
     if (!connectRes.ok && /detached|session closed|target closed/i.test(connectData.error || '')) {
-      showToast('Retrying connection...', 'success');
       const retryRes = await apiFetch('/api/connect', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -307,19 +323,23 @@ async function connect() {
       connectData = await retryRes.json();
       if (!retryRes.ok) {
         showToast(connectData.error || 'Failed to connect. Tap Connect again.', 'error');
+        hideQrOverlay();
         return;
       }
     } else if (!connectRes.ok) {
       showToast(connectData.error || 'Failed to connect', 'error');
+      hideQrOverlay();
       return;
     }
 
     updateConnectionUI(connectData);
-    showToast(connectData.qr ? 'Scan the QR code' : 'Waiting for QR code...');
-    pollStatus();
+    if (connectData.qr) {
+      showToast('Scan the QR code');
+    }
   } catch (err) {
     showToast(err.message || 'Could not reach server', 'error');
     updateConnectionUI({ state: 'disconnected' });
+    hideQrOverlay();
   } finally {
     state.connectInFlight = false;
     els.connectBtn.disabled = false;
@@ -330,17 +350,32 @@ async function connect() {
   }
 }
 
-function pollStatus() {
+function pollStatus(fast = false) {
   if (statusPollTimer) clearInterval(statusPollTimer);
+
+  const interval = fast ? 300 : 1000;
+  let polls = 0;
+  const maxPolls = fast ? 40 : 120;
 
   const tick = async () => {
     try {
       const res = await apiFetch('/api/status');
       const data = await res.json();
       updateConnectionUI(data);
+      polls++;
+      if (data.state === 'qr' && data.qr) {
+        clearInterval(statusPollTimer);
+        statusPollTimer = null;
+        return;
+      }
       if (data.state === 'ready' || data.state === 'disconnected' || data.state === 'auth_failure') {
         clearInterval(statusPollTimer);
         statusPollTimer = null;
+      }
+      if (polls >= maxPolls && data.state === 'connecting') {
+        clearInterval(statusPollTimer);
+        statusPollTimer = null;
+        showToast('Taking longer than expected — tap Connect again', 'error');
       }
     } catch {
       clearInterval(statusPollTimer);
@@ -349,7 +384,7 @@ function pollStatus() {
   };
 
   tick();
-  statusPollTimer = setInterval(tick, 1000);
+  statusPollTimer = setInterval(tick, interval);
 }
 
 async function searchChats(query) {

@@ -45,7 +45,11 @@
         <h2>Scan with WhatsApp</h2>
         <p>Works with <strong>WhatsApp</strong> and <strong>WhatsApp Business</strong></p>
         <div class="qr-frame">
-          <img id="qrImage" alt="QR Code" />
+          <div class="qr-loading" id="qrLoading">
+            <div class="qr-spinner"></div>
+            <p>Generating QR code...</p>
+          </div>
+          <img id="qrImage" alt="QR Code" class="hidden" />
         </div>
         <ol class="qr-steps">
           <li>Open WhatsApp on your phone</li>

@@ -37,6 +37,7 @@ app.get('/api/download', (_req, res) => {
 });
 
 app.get('/api/status', (_req, res) => {
+  whatsapp.warmupConnection();
   res.json(whatsapp.getStatus());
 });
 

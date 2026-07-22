@@ -13,6 +13,8 @@ const CHROME_CANDIDATES = [
 ].filter(Boolean);
 
 const SESSION_PATH = path.join(__dirname, '..', 'data', 'whatsapp-session');
+const WEB_CACHE_PATH = path.join(__dirname, '..', 'data', 'wwebjs_cache');
+const PINNED_WEB_VERSION = '2.3000.1017054665';
 
 const PUPPETEER_ARGS = [
   '--no-sandbox',
@@ -21,6 +23,12 @@ const PUPPETEER_ARGS = [
   '--disable-gpu',
   '--no-first-run',
   '--no-default-browser-check',
+  '--disable-extensions',
+  '--disable-background-networking',
+  '--disable-sync',
+  '--disable-translate',
+  '--mute-audio',
+  '--disable-component-update',
   '--disable-features=IsolateOrigins,site-per-process,MemorySaverMode',
   '--disable-site-isolation-trials',
   '--memory-pressure-off',
@@ -49,8 +57,10 @@ let chatsLoading = false;
 let chatsCacheTime = 0;
 let connectingSince = 0;
 let initInProgress = false;
+let warmupStarted = false;
 const CHATS_CACHE_TTL = 5 * 60 * 1000;
 const CONNECTING_TIMEOUT_MS = 45 * 1000;
+const QR_TARGET_MS = 10000;
 
 function formatChat(chat) {
   const name = chat.name || chat.id?.user || chat.id?._serialized || 'Unknown chat';
@@ -255,15 +265,16 @@ function createClient() {
     authStrategy: new LocalAuth({
       dataPath: SESSION_PATH,
     }),
+    webVersion: PINNED_WEB_VERSION,
     webVersionCache: {
-      type: 'remote',
-      remotePath:
-        'https://raw.githubusercontent.com/wwebjs/whatsapp-web.js/main/web-version.json',
+      type: 'local',
+      path: WEB_CACHE_PATH,
+      strict: false,
     },
     puppeteer: {
       headless: true,
       executablePath: chromePath,
-      protocolTimeout: 120000,
+      protocolTimeout: 60000,
       args: PUPPETEER_ARGS,
     },
   });
@@ -273,7 +284,11 @@ function createClient() {
       connectionState = 'qr';
       connectingSince = 0;
       lastQr = qr;
-      lastQrDataUrl = await qrcode.toDataURL(qr);
+      lastQrDataUrl = await qrcode.toDataURL(qr, {
+        errorCorrectionLevel: 'M',
+        margin: 1,
+        scale: 5,
+      });
       emit('qr', lastQrDataUrl);
     } catch (err) {
       console.error('QR handler error:', err.message);
@@ -338,7 +353,7 @@ async function initialize({ force = false, resetSession = false } = {}) {
 
   if (resetSession) {
     clearSessionData();
-  } else {
+  } else if (client) {
     clearBrowserLocks();
   }
 
@@ -350,7 +365,7 @@ async function initialize({ force = false, resetSession = false } = {}) {
   }
 
   let lastError = null;
-  for (let attempt = 1; attempt <= 3; attempt++) {
+  for (let attempt = 1; attempt <= 2; attempt++) {
     client = createClient();
 
     try {
@@ -358,18 +373,20 @@ async function initialize({ force = false, resetSession = false } = {}) {
       return;
     } catch (err) {
       lastError = err;
-      console.error(`WhatsApp init attempt ${attempt}/3 failed:`, err.message);
-      await disconnect();
+      console.error(`WhatsApp init attempt ${attempt}/2 failed:`, err.message);
+      if (client) {
+        await disconnect({ preserveState: true });
+      }
 
-      if (!isDetachedFrameError(err) || attempt === 3) {
+      if (!isDetachedFrameError(err) || attempt === 2) {
         break;
       }
 
-      if (attempt === 2) {
+      if (attempt === 1) {
         clearSessionData();
       }
 
-      await sleep(2000 * attempt);
+      await sleep(500);
     }
   }
 
@@ -399,6 +416,7 @@ async function disconnect({ preserveState = false } = {}) {
     connectingSince = 0;
     lastQr = null;
     lastQrDataUrl = null;
+    resetWarmup();
   }
   connectedInfo = null;
   cachedChats = [];
@@ -558,7 +576,7 @@ function startConnection({ force = false, resetSession = false } = {}) {
   const stuckWithoutQr =
     connectionState === 'connecting' &&
     connectingSince > 0 &&
-    Date.now() - connectingSince > 12000 &&
+    Date.now() - connectingSince > QR_TARGET_MS &&
     !lastQrDataUrl;
 
   const shouldForce = force || resetSession || connectingTimedOut || stuckWithoutQr;
@@ -583,9 +601,24 @@ function startConnection({ force = false, resetSession = false } = {}) {
     });
 }
 
+/** Start browser in background when page loads so QR is ready faster on Connect. */
+function warmupConnection() {
+  if (warmupStarted || isReady() || initInProgress) return;
+  if (connectionState === 'qr' || connectionState === 'connecting' || connectionState === 'authenticated') {
+    return;
+  }
+  warmupStarted = true;
+  startConnection();
+}
+
+function resetWarmup() {
+  warmupStarted = false;
+}
+
 module.exports = {
   initialize,
   startConnection,
+  warmupConnection,
   disconnect,
   getStatus,
   getChats,

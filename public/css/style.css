@@ -604,6 +604,34 @@ input:focus {
   padding: 16px;
   margin-bottom: 20px;
   display: inline-block;
+  min-width: 220px;
+  min-height: 220px;
+}
+
+.qr-loading {
+  text-align: center;
+  color: #333;
+  padding: 40px 20px;
+}
+
+.qr-loading p {
+  margin-top: 12px;
+  font-size: 0.9rem;
+  color: #555;
+}
+
+.qr-spinner {
+  width: 40px;
+  height: 40px;
+  margin: 0 auto;
+  border: 3px solid #e0e0e0;
+  border-top-color: #00a884;
+  border-radius: 50%;
+  animation: qr-spin 0.8s linear infinite;
+}
+
+@keyframes qr-spin {
+  to { transform: rotate(360deg); }
 }
 
 .qr-frame img {
