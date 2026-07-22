@@ -30,17 +30,31 @@ db.exec(`
     status TEXT DEFAULT 'pending',
     human_delay_min INTEGER DEFAULT 3,
     human_delay_max INTEGER DEFAULT 12,
+    repeat_daily INTEGER DEFAULT 0,
     created_at TEXT DEFAULT (datetime('now')),
     sent_at TEXT,
     error TEXT
   )
 `);
 
+try {
+  db.exec(`ALTER TABLE scheduled_polls ADD COLUMN repeat_daily INTEGER DEFAULT 0`);
+} catch {
+  // column already exists
+}
+
+function getNextDailySchedule(isoString) {
+  const base = new Date(isoString);
+  const next = new Date(base);
+  next.setDate(next.getDate() + 1);
+  return next.toISOString();
+}
+
 const insertPoll = db.prepare(`
   INSERT INTO scheduled_polls
-    (question, options, chat_ids, allow_multiple, scheduled_at, human_delay_min, human_delay_max)
+    (question, options, chat_ids, allow_multiple, scheduled_at, human_delay_min, human_delay_max, repeat_daily)
   VALUES
-    (@question, @options, @chat_ids, @allow_multiple, @scheduled_at, @human_delay_min, @human_delay_max)
+    (@question, @options, @chat_ids, @allow_multiple, @scheduled_at, @human_delay_min, @human_delay_max, @repeat_daily)
 `);
 
 const getPendingPolls = db.prepare(`
@@ -62,6 +76,12 @@ const updatePollStatus = db.prepare(`
   WHERE id = @id
 `);
 
+const reschedulePoll = db.prepare(`
+  UPDATE scheduled_polls
+  SET status = 'pending', scheduled_at = @scheduled_at, sent_at = @sent_at, error = NULL
+  WHERE id = @id
+`);
+
 const deletePoll = db.prepare(`DELETE FROM scheduled_polls WHERE id = ? AND status = 'pending'`);
 
 module.exports = {
@@ -74,6 +94,7 @@ module.exports = {
       scheduled_at: data.scheduledAt,
       human_delay_min: data.humanDelayMin ?? 3,
       human_delay_max: data.humanDelayMax ?? 12,
+      repeat_daily: data.repeatDaily ? 1 : 0,
     });
     return result.lastInsertRowid;
   },
@@ -107,6 +128,21 @@ module.exports = {
     });
   },
 
+  completePollSend(id) {
+    const row = getPollById.get(id);
+    if (!row) return;
+
+    if (row.repeat_daily) {
+      reschedulePoll.run({
+        id,
+        scheduled_at: getNextDailySchedule(row.scheduled_at),
+        sent_at: new Date().toISOString(),
+      });
+    } else {
+      this.markSent(id);
+    }
+  },
+
   markFailed(id, error) {
     updatePollStatus.run({
       id,
@@ -132,6 +168,7 @@ function formatPoll(row) {
     status: row.status,
     humanDelayMin: row.human_delay_min,
     humanDelayMax: row.human_delay_max,
+    repeatDaily: Boolean(row.repeat_daily),
     createdAt: row.created_at,
     sentAt: row.sent_at,
     error: row.error,

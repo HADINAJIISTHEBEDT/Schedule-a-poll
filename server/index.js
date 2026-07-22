@@ -94,7 +94,7 @@ app.get('/api/polls', (_req, res) => {
 });
 
 app.post('/api/polls', (req, res) => {
-  const { question, options, chatIds, allowMultiple, scheduledAt, humanDelayMin, humanDelayMax, sendNow } =
+  const { question, options, chatIds, allowMultiple, scheduledAt, humanDelayMin, humanDelayMax, sendNow, repeatDaily } =
     req.body;
 
   if (!question?.trim()) {
@@ -130,6 +130,7 @@ app.post('/api/polls', (req, res) => {
     scheduledAt: scheduleTime,
     humanDelayMin: humanDelayMin ?? 3,
     humanDelayMax: humanDelayMax ?? 12,
+    repeatDaily: Boolean(repeatDaily),
   });
 
   if (sendNow && whatsapp.isReady()) {
@@ -162,7 +163,7 @@ app.post('/api/polls/:id/send-now', async (req, res) => {
   try {
     db.markSending(poll.id);
     await whatsapp.sendPollToChats(poll);
-    db.markSent(poll.id);
+    db.completePollSend(poll.id);
     res.json({ ok: true });
   } catch (err) {
     db.markFailed(poll.id, err.message);

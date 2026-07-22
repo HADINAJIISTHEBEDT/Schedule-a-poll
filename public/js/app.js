@@ -23,6 +23,7 @@ const els = {
   optionsList: $('#optionsList'),
   addOptionBtn: $('#addOptionBtn'),
   allowMultiple: $('#allowMultiple'),
+  repeatDaily: $('#repeatDaily'),
   chatSearch: $('#chatSearch'),
   chatSearchWrap: $('#chatSearchWrap'),
   chatList: $('#chatList'),
@@ -406,7 +407,8 @@ function renderPolls(polls) {
       <div class="poll-question">${escapeHtml(p.question)}</div>
       <div class="poll-meta">
         ${p.chatIds.length} chat(s) · Scheduled: ${formatDate(p.scheduledAt)}
-        ${p.sentAt ? ` · Sent: ${formatDate(p.sentAt)}` : ''}
+        ${p.repeatDaily ? ' · <span class="repeat-badge">Repeats daily</span>' : ''}
+        ${p.sentAt ? ` · Last sent: ${formatDate(p.sentAt)}` : ''}
       </div>
       <div class="poll-options-preview">
         ${p.options.map((o) => `<span class="option-tag">${escapeHtml(o)}</span>`).join('')}
@@ -466,6 +468,7 @@ async function submitPoll(sendNow = false) {
     options,
     chatIds,
     allowMultiple: els.allowMultiple.checked,
+    repeatDaily: els.repeatDaily.checked,
     scheduledAt,
     humanDelayMin: delayMin,
     humanDelayMax: delayMax,
@@ -483,6 +486,8 @@ async function submitPoll(sendNow = false) {
 
     showToast(sendNow ? 'Poll is being sent naturally...' : 'Poll scheduled!');
     els.question.value = '';
+    els.allowMultiple.checked = false;
+    els.repeatDaily.checked = false;
     state.options = ['', ''];
     renderOptions();
     loadPolls();

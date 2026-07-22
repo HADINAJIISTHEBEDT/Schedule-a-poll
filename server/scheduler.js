@@ -26,7 +26,7 @@ async function processDuePolls() {
     try {
       db.markSending(poll.id);
       await whatsapp.sendPollToChats(poll);
-      db.markSent(poll.id);
+      db.completePollSend(poll.id);
     } catch (err) {
       db.markFailed(poll.id, err.message);
     }

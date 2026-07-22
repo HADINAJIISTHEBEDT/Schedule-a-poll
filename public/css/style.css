@@ -224,6 +224,17 @@ input:focus {
   font-weight: 400;
 }
 
+.poll-options-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px 24px;
+}
+
+.repeat-badge {
+  color: var(--accent);
+  font-weight: 600;
+}
+
 .range-row {
   display: flex;
   align-items: center;
