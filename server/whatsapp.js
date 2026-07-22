@@ -48,6 +48,7 @@ let cachedContacts = null;
 let chatsLoading = false;
 let chatsCacheTime = 0;
 let connectingSince = 0;
+let initInProgress = false;
 const CHATS_CACHE_TTL = 5 * 60 * 1000;
 const CONNECTING_TIMEOUT_MS = 45 * 1000;
 
@@ -341,10 +342,12 @@ async function initialize({ force = false, resetSession = false } = {}) {
     clearBrowserLocks();
   }
 
-  await disconnect();
-
   connectionState = 'connecting';
   connectingSince = Date.now();
+
+  if (client) {
+    await disconnect({ preserveState: true });
+  }
 
   let lastError = null;
   for (let attempt = 1; attempt <= 3; attempt++) {
@@ -381,7 +384,7 @@ async function initialize({ force = false, resetSession = false } = {}) {
   throw new Error(message);
 }
 
-async function disconnect() {
+async function disconnect({ preserveState = false } = {}) {
   if (client) {
     try {
       await client.destroy();
@@ -391,14 +394,16 @@ async function disconnect() {
     client = null;
   }
   clearBrowserLocks();
-  connectionState = 'disconnected';
+  if (!preserveState) {
+    connectionState = 'disconnected';
+    connectingSince = 0;
+    lastQr = null;
+    lastQrDataUrl = null;
+  }
   connectedInfo = null;
   cachedChats = [];
   cachedContacts = null;
   chatsCacheTime = 0;
-  connectingSince = 0;
-  lastQr = null;
-  lastQrDataUrl = null;
 }
 
 async function searchChats({ query = '', filter = 'all', includeContacts = true } = {}) {
@@ -542,8 +547,45 @@ function isReady() {
   return connectionState === 'ready' && client !== null;
 }
 
+function startConnection({ force = false, resetSession = false } = {}) {
+  if (isReady()) return;
+
+  const connectingTimedOut =
+    connectionState === 'connecting' &&
+    connectingSince > 0 &&
+    Date.now() - connectingSince > CONNECTING_TIMEOUT_MS;
+
+  const stuckWithoutQr =
+    connectionState === 'connecting' &&
+    connectingSince > 0 &&
+    Date.now() - connectingSince > 12000 &&
+    !lastQrDataUrl;
+
+  const shouldForce = force || resetSession || connectingTimedOut || stuckWithoutQr;
+
+  if (initInProgress && !shouldForce) return;
+  if (connectionState === 'qr' && lastQrDataUrl && !shouldForce) return;
+
+  initInProgress = true;
+  connectionState = 'connecting';
+  connectingSince = Date.now();
+
+  initialize({ force: shouldForce, resetSession })
+    .catch((err) => {
+      console.error('WhatsApp connection failed:', err.message);
+      if (connectionState === 'connecting' || connectionState === 'authenticated') {
+        connectionState = 'disconnected';
+        connectingSince = 0;
+      }
+    })
+    .finally(() => {
+      initInProgress = false;
+    });
+}
+
 module.exports = {
   initialize,
+  startConnection,
   disconnect,
   getStatus,
   getChats,

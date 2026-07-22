@@ -9,6 +9,7 @@ const state = {
   connectionState: 'disconnected',
   searching: false,
   lastSearchQuery: '',
+  connectInFlight: false,
 };
 
 const els = {
@@ -253,53 +254,74 @@ async function fetchStatus() {
 }
 
 async function connect() {
-  const status = await apiFetch('/api/status').then((r) => r.json());
+  if (state.connectInFlight) return;
 
-  if (status.state === 'ready') {
-    await apiFetch('/api/disconnect', { method: 'POST' });
-    state.searchResults = [];
-    state.selectedChats.clear();
-    state.selectedChatMeta.clear();
-    state.lastSearchQuery = '';
-    els.chatSearch.value = '';
-    renderChats();
-    showToast('Disconnected');
-    return fetchStatus();
-  }
+  try {
+    state.connectInFlight = true;
+    els.connectBtn.disabled = true;
+    els.connectBtn.textContent = 'Connecting...';
+    showToast('Starting WhatsApp connection...');
 
-  if (status.state === 'qr') {
-    updateConnectionUI(status);
-    showToast('Scan the QR code with your phone');
-    pollStatus();
-    return;
-  }
+    const status = await apiFetch('/api/status').then((r) => r.json());
 
-  const connectRes = await apiFetch('/api/connect', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ force: status.state === 'connecting' && !status.qr }),
-  });
-  let connectData = await connectRes.json();
+    if (status.state === 'ready') {
+      await apiFetch('/api/disconnect', { method: 'POST' });
+      state.searchResults = [];
+      state.selectedChats.clear();
+      state.selectedChatMeta.clear();
+      state.lastSearchQuery = '';
+      els.chatSearch.value = '';
+      renderChats();
+      showToast('Disconnected');
+      return fetchStatus();
+    }
 
-  if (!connectRes.ok && /detached|session closed|target closed/i.test(connectData.error || '')) {
-    showToast('Retrying connection...', 'success');
-    const retryRes = await apiFetch('/api/connect', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ force: true, reset: true }),
-    });
-    connectData = await retryRes.json();
-    if (!retryRes.ok) {
-      showToast(connectData.error || 'Failed to connect. Tap Connect again.', 'error');
+    if (status.state === 'qr' && status.qr) {
+      updateConnectionUI(status);
+      showToast('Scan the QR code with your phone');
+      pollStatus();
       return;
     }
-  } else if (!connectRes.ok) {
-    showToast(connectData.error || 'Failed to connect', 'error');
-    return;
+
+    const stuckConnecting = status.state === 'connecting' && !status.qr;
+    const connectRes = await apiFetch('/api/connect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ force: stuckConnecting, reset: stuckConnecting }),
+    });
+    let connectData = await connectRes.json();
+
+    if (!connectRes.ok && /detached|session closed|target closed/i.test(connectData.error || '')) {
+      showToast('Retrying connection...', 'success');
+      const retryRes = await apiFetch('/api/connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ force: true, reset: true }),
+      });
+      connectData = await retryRes.json();
+      if (!retryRes.ok) {
+        showToast(connectData.error || 'Failed to connect. Tap Connect again.', 'error');
+        return;
+      }
+    } else if (!connectRes.ok) {
+      showToast(connectData.error || 'Failed to connect', 'error');
+      return;
+    }
+
+    updateConnectionUI(connectData);
+    showToast(connectData.qr ? 'Scan the QR code' : 'Waiting for QR code...');
+    pollStatus();
+  } catch (err) {
+    showToast(err.message || 'Could not reach server', 'error');
+    updateConnectionUI({ state: 'disconnected' });
+  } finally {
+    state.connectInFlight = false;
+    els.connectBtn.disabled = false;
+    if (state.connectionState !== 'ready') {
+      els.connectBtn.textContent =
+        state.connectionState === 'qr' ? 'Show QR Code' : 'Connect WhatsApp';
+    }
   }
-  updateConnectionUI(connectData);
-  showToast(connectData.qr ? 'Scan the QR code' : 'Connecting — waiting for QR code...');
-  pollStatus();
 }
 
 function pollStatus() {

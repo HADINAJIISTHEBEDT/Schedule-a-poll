@@ -79,6 +79,11 @@ body {
   padding: 8px 14px;
 }
 
+.connection-panel .btn:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
 .status-dot {
   width: 10px;
   height: 10px;
@@ -628,10 +633,6 @@ input:focus {
   padding: 10px 12px;
   color: var(--text);
   font: inherit;
-}
-
-  opacity: 0;
-  pointer-events: none;
 }
 
 .toast.error {
