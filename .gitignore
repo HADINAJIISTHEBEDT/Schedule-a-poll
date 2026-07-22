@@ -5,4 +5,6 @@ data/
 android-sdk/
 *.db
 .env
+serviceAccount*.json
+firebase-adminsdk*.json
 .DS_Store

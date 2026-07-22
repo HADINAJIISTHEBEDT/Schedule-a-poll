@@ -4,6 +4,11 @@ const fs = require('fs');
 const db = require('./database');
 const whatsapp = require('./whatsapp');
 const scheduler = require('./scheduler');
+const { firebaseConfig, isFirebaseConfigured, initFirebaseAdmin } = require('./firebase');
+
+if (isFirebaseConfigured()) {
+  initFirebaseAdmin();
+}
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
@@ -95,11 +100,23 @@ app.get('/api/chats/search', async (req, res) => {
   }
 });
 
-app.get('/api/polls', (_req, res) => {
-  res.json(db.getAllPolls());
+app.get('/api/firebase-config', (_req, res) => {
+  res.json({
+    enabled: isFirebaseConfigured(),
+    ...firebaseConfig,
+  });
 });
 
-app.post('/api/polls', (req, res) => {
+app.get('/api/polls', async (_req, res) => {
+  try {
+    res.json(await db.getAllPolls());
+  } catch (err) {
+    console.error('GET /api/polls error:', err.message);
+    res.status(500).json({ error: err.message || 'Failed to load polls' });
+  }
+});
+
+app.post('/api/polls', async (req, res) => {
   const { question, options, chatIds, allowMultiple, scheduledAt, humanDelayMin, humanDelayMax, sendNow, repeatDaily } =
     req.body;
 
@@ -128,34 +145,39 @@ app.post('/api/polls', (req, res) => {
     return res.status(400).json({ error: 'Invalid schedule time' });
   }
 
-  const id = db.createPoll({
-    question: question.trim(),
-    options: cleanOptions,
-    chatIds,
-    allowMultiple: Boolean(allowMultiple),
-    scheduledAt: scheduleTime,
-    humanDelayMin: humanDelayMin ?? 3,
-    humanDelayMax: humanDelayMax ?? 12,
-    repeatDaily: Boolean(repeatDaily),
-  });
+  try {
+    const id = await db.createPoll({
+      question: question.trim(),
+      options: cleanOptions,
+      chatIds,
+      allowMultiple: Boolean(allowMultiple),
+      scheduledAt: scheduleTime,
+      humanDelayMin: humanDelayMin ?? 3,
+      humanDelayMax: humanDelayMax ?? 12,
+      repeatDaily: Boolean(repeatDaily),
+    });
 
-  if (sendNow && whatsapp.isReady()) {
-    scheduler.processDuePolls().catch(() => {});
+    if (sendNow && whatsapp.isReady()) {
+      scheduler.processDuePolls().catch(() => {});
+    }
+
+    res.json({ id, message: sendNow ? 'Poll queued for immediate delivery' : 'Poll scheduled' });
+  } catch (err) {
+    console.error('POST /api/polls error:', err.message);
+    res.status(500).json({ error: err.message || 'Failed to save poll' });
   }
-
-  res.json({ id, message: sendNow ? 'Poll queued for immediate delivery' : 'Poll scheduled' });
 });
 
-app.delete('/api/polls/:id', (req, res) => {
-  const result = db.deletePoll(Number(req.params.id));
-  if (result.changes === 0) {
+app.delete('/api/polls/:id', async (req, res) => {
+  const result = await db.deletePoll(req.params.id);
+  if (!result.deleted) {
     return res.status(404).json({ error: 'Poll not found or already sent' });
   }
   res.json({ ok: true });
 });
 
 app.post('/api/polls/:id/send-now', async (req, res) => {
-  const poll = db.getPollById(Number(req.params.id));
+  const poll = await db.getPollById(req.params.id);
   if (!poll) {
     return res.status(404).json({ error: 'Poll not found' });
   }
@@ -167,17 +189,19 @@ app.post('/api/polls/:id/send-now', async (req, res) => {
   }
 
   try {
-    db.markSending(poll.id);
+    await db.markSending(poll.id);
     await whatsapp.sendPollToChats(poll);
-    db.completePollSend(poll.id);
+    await db.completePollSend(poll.id);
     res.json({ ok: true });
   } catch (err) {
-    db.markFailed(poll.id, err.message);
+    await db.markFailed(poll.id, err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
-app.listen(PORT, HOST, () => {
+app.listen(PORT, HOST, async () => {
+  const polls = await db.getAllPolls().catch(() => []);
   console.log(`Poll Scheduler running at http://${HOST}:${PORT}`);
+  console.log(`Poll storage backend ready (${polls.length} polls loaded)`);
   scheduler.start();
 });

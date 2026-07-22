@@ -673,7 +673,11 @@ if (isCapacitorApp() && !getApiBase()) {
   openServerSettings();
 } else {
   fetchStatus();
-  loadPolls();
+  if (typeof window.initFirebaseRealtime === 'function') {
+    window.initFirebaseRealtime(renderPolls);
+  } else {
+    loadPolls();
+  }
 }
 
 setInterval(() => {
@@ -684,6 +688,8 @@ setInterval(() => {
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) {
     fetchStatus();
-    loadPolls();
+    if (typeof window.initFirebaseRealtime !== 'function') {
+      loadPolls();
+    }
   }
 });

@@ -15,6 +15,10 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      - key: USE_FIREBASE
+        value: "true"
+      - key: FIREBASE_PROJECT_ID
+        value: poll-generation-7decd
       - key: PUPPETEER_EXECUTABLE_PATH
         value: /usr/bin/chromium
       - key: PUPPETEER_SKIP_CHROMIUM_DOWNLOAD

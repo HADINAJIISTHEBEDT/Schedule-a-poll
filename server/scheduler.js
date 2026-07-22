@@ -7,28 +7,18 @@ let isProcessing = false;
 async function processDuePolls() {
   if (isProcessing || !whatsapp.isReady()) return;
 
-  const pending = db.getPendingPolls();
+  const pending = await db.getPendingPolls();
   if (pending.length === 0) return;
 
   isProcessing = true;
 
-  for (const row of pending) {
-    const poll = {
-      id: row.id,
-      question: row.question,
-      options: JSON.parse(row.options),
-      chatIds: JSON.parse(row.chat_ids),
-      allowMultiple: Boolean(row.allow_multiple),
-      humanDelayMin: row.human_delay_min,
-      humanDelayMax: row.human_delay_max,
-    };
-
+  for (const poll of pending) {
     try {
-      db.markSending(poll.id);
+      await db.markSending(poll.id);
       await whatsapp.sendPollToChats(poll);
-      db.completePollSend(poll.id);
+      await db.completePollSend(poll.id);
     } catch (err) {
-      db.markFailed(poll.id, err.message);
+      await db.markFailed(poll.id, err.message);
     }
   }
 
