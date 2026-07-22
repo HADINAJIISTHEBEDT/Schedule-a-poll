@@ -92,12 +92,11 @@
             <button type="button" class="chat-filter" data-filter="groups">Groups</button>
             <button type="button" class="chat-filter" data-filter="contacts">Contacts</button>
           </div>
-          <div class="chat-search">
-            <input type="text" id="chatSearch" placeholder="Type group or contact name..." />
-          </div>
-          <p class="chat-summary" id="chatSummary">Connect WhatsApp to search chats</p>
-          <div class="chat-list" id="chatList">
-            <p class="placeholder">Connect WhatsApp, then search for groups or contacts</p>
+          <div class="chat-search-wrap" id="chatSearchWrap">
+            <input type="text" id="chatSearch" placeholder="Search contact or group..." autocomplete="off" />
+            <div class="chat-results" id="chatList">
+              <p class="placeholder">Connect WhatsApp, then search</p>
+            </div>
           </div>
           <p class="selected-count" id="selectedCount">0 chats selected</p>
         </div>

@@ -23,10 +23,10 @@ const els = {
   addOptionBtn: $('#addOptionBtn'),
   allowMultiple: $('#allowMultiple'),
   chatSearch: $('#chatSearch'),
+  chatSearchWrap: $('#chatSearchWrap'),
   chatList: $('#chatList'),
   qrPanel: $('#qrPanel'),
   qrInlineImage: $('#qrInlineImage'),
-  chatSummary: $('#chatSummary'),
   selectedCount: $('#selectedCount'),
   scheduledAt: $('#scheduledAt'),
   delayMin: $('#delayMin'),
@@ -85,45 +85,36 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
-function getSelectedChatsList() {
-  return [...state.selectedChats].map((id) => {
-    const meta = state.selectedChatMeta.get(id);
-    const fromSearch = state.searchResults.find((c) => c.id === id);
-    return fromSearch || meta || { id, name: 'Unknown chat', isGroup: false };
-  });
+function renderChatCheckbox(chat, checked = false) {
+  return `
+    <label class="chat-item ${checked ? 'selected' : ''}" data-id="${chat.id}">
+      <input type="checkbox" ${checked ? 'checked' : ''} />
+      <div class="chat-item-box">
+        <div class="chat-name">${escapeHtml(chat.name)}</div>
+        <div class="chat-meta">${chat.isGroup ? 'Group' : 'Contact'}</div>
+      </div>
+    </label>`;
+}
+
+function setSearchDropdownOpen(open) {
+  if (els.chatSearchWrap) {
+    els.chatSearchWrap.classList.toggle('has-results', open);
+  }
 }
 
 function renderChats() {
   const query = els.chatSearch.value.trim();
-  updateChatSummary(query);
-
-  const selected = getSelectedChatsList();
   let html = '';
 
-  if (selected.length) {
-    html += `<div class="chat-section-title">Selected (${selected.length})</div>`;
-    html += selected
-      .map(
-        (chat) => `
-      <label class="chat-item selected" data-id="${chat.id}">
-        <input type="checkbox" checked />
-        <div>
-          <div class="chat-name">${escapeHtml(chat.name)}</div>
-          <div class="chat-meta">${chat.isGroup ? 'Group' : 'Contact'}</div>
-        </div>
-      </label>`
-      )
-      .join('');
-  }
-
   if (state.connectionState !== 'ready') {
+    setSearchDropdownOpen(false);
     const emptyMessage =
       state.connectionState === 'qr'
-        ? 'Scan the QR code below with your phone.'
+        ? 'Scan the QR code with your phone'
         : state.connectionState === 'authenticated' || state.connectionState === 'connecting'
           ? 'Waiting for QR code...'
-          : 'Connect WhatsApp above, then search for chats';
-    html += `<p class="placeholder">${emptyMessage}</p>`;
+          : 'Connect WhatsApp first';
+    html = `<p class="placeholder">${emptyMessage}</p>`;
     if (lastQrUrl && (state.connectionState === 'qr' || state.connectionState === 'connecting')) {
       html += `<div class="qr-inline"><img src="${lastQrUrl}" alt="WhatsApp QR code" /></div>`;
     }
@@ -132,63 +123,34 @@ function renderChats() {
     return;
   }
 
-  if (query.length < 2) {
-    html += `<p class="placeholder">Search for a group or contact name (min. 2 characters)</p>`;
-    els.chatList.innerHTML = html;
+  if (query.length < 1) {
+    setSearchDropdownOpen(false);
+    els.chatList.innerHTML = '';
     updateSelectedCount();
     return;
   }
 
+  setSearchDropdownOpen(true);
+
   if (state.searching) {
-    html += `<p class="placeholder">Searching...</p>`;
+    html = `<p class="placeholder">Searching...</p>`;
     els.chatList.innerHTML = html;
     return;
   }
 
   if (!state.searchResults.length) {
-    html += `<p class="placeholder">No results for "${escapeHtml(query)}"</p>`;
+    html = `<p class="placeholder">No match for "${escapeHtml(query)}"</p>`;
     els.chatList.innerHTML = html;
     updateSelectedCount();
     return;
   }
 
-  const selectedIds = state.selectedChats;
-  const results = state.searchResults.filter((c) => !selectedIds.has(c.id));
-
-  if (results.length) {
-    html += `<div class="chat-section-title">Results (${results.length})</div>`;
-    html += results
-      .map(
-        (chat) => `
-      <label class="chat-item" data-id="${chat.id}">
-        <input type="checkbox" />
-        <div>
-          <div class="chat-name">${escapeHtml(chat.name)}</div>
-          <div class="chat-meta">${chat.isGroup ? 'Group' : 'Contact'}</div>
-        </div>
-      </label>`
-      )
-      .join('');
-  }
+  html = state.searchResults
+    .map((chat) => renderChatCheckbox(chat, state.selectedChats.has(chat.id)))
+    .join('');
 
   els.chatList.innerHTML = html;
   updateSelectedCount();
-}
-
-function updateChatSummary(query = '') {
-  if (state.connectionState !== 'ready') {
-    els.chatSummary.textContent = 'Connect WhatsApp to search chats';
-    return;
-  }
-  if (state.searching) {
-    els.chatSummary.textContent = 'Searching...';
-    return;
-  }
-  if (query.length < 2) {
-    els.chatSummary.textContent = 'Type a name to find groups or contacts';
-    return;
-  }
-  els.chatSummary.textContent = `${state.searchResults.length} result${state.searchResults.length !== 1 ? 's' : ''} found`;
 }
 
 function toggleChat(id, selected, chatMeta = null) {
@@ -364,7 +326,7 @@ function pollStatus() {
 
 async function searchChats(query) {
   const term = query.trim();
-  if (term.length < 2) {
+  if (term.length < 1) {
     state.searchResults = [];
     state.lastSearchQuery = '';
     renderChats();
@@ -574,7 +536,7 @@ document.querySelectorAll('.chat-filter').forEach((btn) => {
     document.querySelectorAll('.chat-filter').forEach((b) => b.classList.remove('active'));
     btn.classList.add('active');
     state.chatFilter = btn.dataset.filter;
-    if (els.chatSearch.value.trim().length >= 2) {
+    if (els.chatSearch.value.trim().length >= 1) {
       searchChats(els.chatSearch.value);
     } else {
       renderChats();

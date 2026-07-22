@@ -407,7 +407,7 @@ async function searchChats({ query = '', filter = 'all', includeContacts = true 
   }
 
   const term = query.trim().toLowerCase();
-  if (term.length < 2) {
+  if (term.length < 1) {
     return [];
   }
 

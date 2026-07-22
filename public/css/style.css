@@ -229,6 +229,47 @@ input:focus {
   width: 72px;
 }
 
+.chat-search-wrap {
+  position: relative;
+  margin-bottom: 8px;
+}
+
+.chat-search-wrap input {
+  width: 100%;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  padding: 12px 14px;
+  font: inherit;
+  font-size: 1rem;
+}
+
+.chat-search-wrap.has-results input {
+  border-radius: var(--radius) var(--radius) 0 0;
+  border-bottom-color: transparent;
+}
+
+.chat-search-wrap.has-results input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.chat-results {
+  display: none;
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 var(--radius) var(--radius);
+  background: var(--surface-2);
+  box-shadow: var(--shadow);
+}
+
+.chat-search-wrap.has-results .chat-results {
+  display: block;
+}
+
 .chat-search {
   display: flex;
   gap: 8px;
@@ -280,35 +321,49 @@ input:focus {
 
 .chat-search input { flex: 1; }
 
-.chat-list {
-  max-height: 280px;
-  overflow-y: auto;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface-2);
-  contain: strict;
-}
-
-.load-more-chats {
-  width: calc(100% - 16px);
-  margin: 8px;
-}
-
 .chat-item {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
+  gap: 12px;
+  padding: 12px 14px;
   cursor: pointer;
   border-bottom: 1px solid var(--border);
   transition: background 0.1s;
 }
 
+.chat-item input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.chat-item-box {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
 .chat-item:last-child { border-bottom: none; }
 .chat-item:hover { background: rgba(0, 168, 132, 0.06); }
-.chat-item.selected { background: rgba(0, 168, 132, 0.12); }
+.chat-item:hover .chat-item-box { border-color: var(--accent); }
+.chat-item.selected { background: rgba(0, 168, 132, 0.1); }
+.chat-item.selected .chat-item-box {
+  border-color: var(--accent);
+  background: rgba(0, 168, 132, 0.08);
+}
 
-.chat-item input { accent-color: var(--accent); }
+.chat-results .placeholder {
+  padding: 14px;
+  margin: 0;
+  text-align: center;
+  font-size: 0.875rem;
+  color: var(--text-muted);
+}
 
 .chat-name {
   font-weight: 500;
