@@ -1,6 +1,9 @@
 FROM node:20-bookworm-slim
 
 RUN apt-get update && apt-get install -y \
+    python3 \
+    make \
+    g++ \
     chromium \
     ca-certificates \
     fonts-liberation \
@@ -25,6 +28,7 @@ RUN apt-get update && apt-get install -y \
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV NODE_ENV=production
+ENV DBUS_SESSION_BUS_ADDRESS=/dev/null
 
 WORKDIR /app
 
@@ -37,4 +41,4 @@ RUN node scripts/patch-whatsapp.js
 RUN mkdir -p /app/data
 
 EXPOSE 3000
-CMD ["npm", "start"]
+CMD ["node", "server/index.js"]
