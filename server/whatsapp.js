@@ -24,7 +24,6 @@ const PUPPETEER_ARGS = [
   '--no-first-run',
   '--no-default-browser-check',
   '--disable-extensions',
-  '--disable-background-networking',
   '--disable-sync',
   '--disable-translate',
   '--mute-audio',
@@ -32,6 +31,10 @@ const PUPPETEER_ARGS = [
   '--disable-features=IsolateOrigins,site-per-process,MemorySaverMode',
   '--disable-site-isolation-trials',
   '--memory-pressure-off',
+  '--disable-background-timer-throttling',
+  '--disable-renderer-backgrounding',
+  '--disable-backgrounding-occluded-windows',
+  '--no-zygote',
 ];
 
 function isDetachedFrameError(err) {
@@ -59,9 +62,54 @@ let connectingSince = 0;
 let initInProgress = false;
 let warmupStarted = false;
 let readyCheckTimer = null;
+let keepaliveTimer = null;
 const CHATS_CACHE_TTL = 5 * 60 * 1000;
 const CONNECTING_TIMEOUT_MS = 45 * 1000;
 const QR_TARGET_MS = 10000;
+
+function stopKeepalive() {
+  if (keepaliveTimer) {
+    clearInterval(keepaliveTimer);
+    keepaliveTimer = null;
+  }
+}
+
+function startKeepalive(instance) {
+  stopKeepalive();
+
+  keepaliveTimer = setInterval(async () => {
+    if (!instance || connectionState !== 'ready') {
+      stopKeepalive();
+      return;
+    }
+
+    try {
+      const waState = await instance.getState();
+      if (waState !== 'CONNECTED') {
+        console.warn('WhatsApp session dropped:', waState);
+        stopKeepalive();
+        connectionState = 'disconnected';
+        connectedInfo = null;
+        const deadClient = client;
+        client = null;
+        resetWarmup();
+        if (deadClient) {
+          try {
+            await deadClient.destroy();
+          } catch {
+            // ignore
+          }
+        }
+        setTimeout(() => startConnection({ force: true }), 3000);
+        return;
+      }
+
+      await instance.sendPresenceAvailable();
+    } catch (err) {
+      console.error('WhatsApp keepalive error:', err.message);
+    }
+  }, 25000);
+}
 
 function stopReadyCheck() {
   if (readyCheckTimer) {
@@ -134,6 +182,7 @@ async function tryFinalizeReady(instance) {
   lastQrDataUrl = null;
   connectedInfo = await readConnectedInfo(instance);
   stopReadyCheck();
+  startKeepalive(instance);
   emit('ready', connectedInfo);
   console.log('WhatsApp linked as', connectedInfo.pushname);
   fetchAndCacheChats({ refresh: false, includeContacts: true }).catch((err) => {
@@ -370,6 +419,11 @@ function createClient() {
     authStrategy: new LocalAuth({
       dataPath: SESSION_PATH,
     }),
+    takeoverOnConflict: true,
+    takeoverTimeoutMs: 5000,
+    deviceName: 'Poll Scheduler',
+    browserName: 'Chrome',
+    authTimeoutMs: 120000,
     webVersion: PINNED_WEB_VERSION,
     webVersionCache: {
       type: 'local',
@@ -405,6 +459,7 @@ function createClient() {
     lastQr = null;
     lastQrDataUrl = null;
     startReadyCheck(instance);
+    instance.sendPresenceAvailable().catch(() => {});
   });
 
   instance.on('loading_screen', (percent) => {
@@ -431,19 +486,34 @@ function createClient() {
       connectedInfo = { pushname: 'Connected' };
     }
 
+    startKeepalive(instance);
     emit('ready', connectedInfo);
     fetchAndCacheChats({ refresh: false, includeContacts: true }).catch((err) => {
       console.error('Chat cache warmup failed:', err.message);
     });
   });
 
+  instance.on('change_state', (state) => {
+    console.log('WhatsApp state:', state);
+    if (state === 'CONNECTED' && connectionState === 'authenticated') {
+      tryFinalizeReady(instance).catch(() => {});
+    }
+  });
+
   instance.on('disconnected', (reason) => {
     stopReadyCheck();
+    stopKeepalive();
     connectionState = 'disconnected';
     connectedInfo = null;
     client = null;
     connectingSince = 0;
+    resetWarmup();
     emit('disconnected', reason);
+
+    if (reason !== 'LOGOUT') {
+      console.log('WhatsApp disconnected, reconnecting in 5s:', reason);
+      setTimeout(() => startConnection({ force: true }), 5000);
+    }
   });
 
   instance.on('auth_failure', (msg) => {
@@ -521,6 +591,7 @@ async function initialize({ force = false, resetSession = false } = {}) {
 
 async function disconnect({ preserveState = false } = {}) {
   stopReadyCheck();
+  stopKeepalive();
   if (client) {
     try {
       await client.destroy();
