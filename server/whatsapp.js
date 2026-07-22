@@ -63,7 +63,9 @@ let initInProgress = false;
 let warmupStarted = false;
 let readyCheckTimer = null;
 let keepaliveTimer = null;
+let keepaliveMisses = 0;
 const CHATS_CACHE_TTL = 5 * 60 * 1000;
+const FATAL_WA_STATES = new Set(['UNPAIRED', 'UNPAIRED_IDLE', 'DISCONNECTED', 'LOGOUT']);
 const CONNECTING_TIMEOUT_MS = 45 * 1000;
 const QR_TARGET_MS = 10000;
 
@@ -72,10 +74,12 @@ function stopKeepalive() {
     clearInterval(keepaliveTimer);
     keepaliveTimer = null;
   }
+  keepaliveMisses = 0;
 }
 
 function startKeepalive(instance) {
   stopKeepalive();
+  keepaliveMisses = 0;
 
   keepaliveTimer = setInterval(async () => {
     if (!instance || connectionState !== 'ready') {
@@ -85,30 +89,57 @@ function startKeepalive(instance) {
 
     try {
       const waState = await instance.getState();
-      if (waState !== 'CONNECTED') {
-        console.warn('WhatsApp session dropped:', waState);
-        stopKeepalive();
-        connectionState = 'disconnected';
-        connectedInfo = null;
-        const deadClient = client;
-        client = null;
-        resetWarmup();
-        if (deadClient) {
-          try {
-            await deadClient.destroy();
-          } catch {
-            // ignore
-          }
-        }
-        setTimeout(() => startConnection({ force: true }), 3000);
+
+      if (waState === 'CONNECTED') {
+        keepaliveMisses = 0;
+        await instance.sendPresenceAvailable();
         return;
       }
 
-      await instance.sendPresenceAvailable();
+      if (FATAL_WA_STATES.has(waState)) {
+        console.warn('WhatsApp session ended:', waState);
+        await handleSessionLost();
+        return;
+      }
+
+      keepaliveMisses++;
+      if (keepaliveMisses >= 6) {
+        console.warn('WhatsApp keepalive: session unstable:', waState);
+        const recovered = await tryFinalizeReady(instance);
+        if (!recovered) {
+          await handleSessionLost();
+        } else {
+          keepaliveMisses = 0;
+        }
+      }
     } catch (err) {
+      keepaliveMisses++;
       console.error('WhatsApp keepalive error:', err.message);
+      if (keepaliveMisses >= 6) {
+        await handleSessionLost();
+      }
     }
   }, 25000);
+}
+
+async function handleSessionLost() {
+  stopKeepalive();
+  keepaliveMisses = 0;
+  if (connectionState === 'disconnected') return;
+
+  connectionState = 'disconnected';
+  connectedInfo = null;
+  const deadClient = client;
+  client = null;
+  resetWarmup();
+  if (deadClient) {
+    try {
+      await deadClient.destroy();
+    } catch {
+      // ignore
+    }
+  }
+  setTimeout(() => startConnection({ force: true }), 5000);
 }
 
 function stopReadyCheck() {
@@ -149,13 +180,20 @@ async function readConnectedInfo(instance) {
   }
 }
 
+async function isSessionConnected(instance) {
+  if (!instance?.pupPage) return false;
+  try {
+    return (await instance.getState()) === 'CONNECTED';
+  } catch {
+    return false;
+  }
+}
+
 async function isClientFullyReady(instance) {
   if (!instance?.pupPage) return false;
+  if (!(await isSessionConnected(instance))) return false;
 
   try {
-    const waState = await instance.getState();
-    if (waState !== 'CONNECTED') return false;
-
     return await instance.pupPage.evaluate(() => {
       if (typeof window.WWebJS === 'undefined') return false;
       try {
@@ -173,8 +211,8 @@ async function isClientFullyReady(instance) {
 async function tryFinalizeReady(instance) {
   if (!instance || connectionState === 'ready') return true;
 
-  const fullyReady = await isClientFullyReady(instance);
-  if (!fullyReady) return false;
+  const connected = await isSessionConnected(instance);
+  if (!connected) return false;
 
   connectionState = 'ready';
   connectingSince = 0;
@@ -379,14 +417,24 @@ function emit(event, data) {
 }
 
 function getStatus() {
-  if (connectionState === 'authenticated' && client) {
-    tryFinalizeReady(client).catch(() => {});
-  }
   return {
     state: connectionState,
     qr: lastQrDataUrl,
     connectedInfo,
   };
+}
+
+async function refreshStatus() {
+  if (client && connectionState !== 'ready' && connectionState !== 'disconnected') {
+    await tryFinalizeReady(client);
+  } else if (client && connectionState === 'ready') {
+    const connected = await isSessionConnected(client);
+    if (!connected) {
+      connectionState = 'authenticated';
+      await tryFinalizeReady(client);
+    }
+  }
+  return getStatus();
 }
 
 function clearSessionData() {
@@ -495,7 +543,7 @@ function createClient() {
 
   instance.on('change_state', (state) => {
     console.log('WhatsApp state:', state);
-    if (state === 'CONNECTED' && connectionState === 'authenticated') {
+    if (state === 'CONNECTED' && connectionState !== 'ready') {
       tryFinalizeReady(instance).catch(() => {});
     }
   });
@@ -558,6 +606,9 @@ async function initialize({ force = false, resetSession = false } = {}) {
 
     try {
       await client.initialize();
+      setTimeout(() => {
+        if (client) tryFinalizeReady(client).catch(() => {});
+      }, 2000);
       return;
     } catch (err) {
       lastError = err;
@@ -820,6 +871,7 @@ module.exports = {
   warmupConnection,
   disconnect,
   getStatus,
+  refreshStatus,
   getChats,
   searchChats,
   sendPollToChats,

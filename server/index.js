@@ -36,20 +36,25 @@ app.get('/api/download', (_req, res) => {
   res.json({ available: true, url: '/download/apk' });
 });
 
-app.get('/api/status', (_req, res) => {
+app.get('/api/status', async (_req, res) => {
   whatsapp.warmupConnection();
-  res.json(whatsapp.getStatus());
+  try {
+    res.json(await whatsapp.refreshStatus());
+  } catch (err) {
+    console.error('GET /api/status error:', err.message);
+    res.json(whatsapp.getStatus());
+  }
 });
 
-app.post('/api/connect', (req, res) => {
+app.post('/api/connect', async (req, res) => {
   try {
     if (whatsapp.isReady()) {
-      return res.json({ ok: true, message: 'Already connected', ...whatsapp.getStatus() });
+      return res.json({ ok: true, message: 'Already connected', ...(await whatsapp.refreshStatus()) });
     }
     const force = req.body?.force === true || req.query.force === '1';
     const resetSession = req.body?.reset === true || req.query.reset === '1';
     whatsapp.startConnection({ force, resetSession });
-    res.json({ ok: true, message: 'Connecting — scan the QR code', ...whatsapp.getStatus() });
+    res.json({ ok: true, message: 'Connecting — scan the QR code', ...(await whatsapp.refreshStatus()) });
   } catch (err) {
     console.error('POST /api/connect error:', err.message);
     res.status(500).json({ ok: false, error: err.message, ...whatsapp.getStatus() });
