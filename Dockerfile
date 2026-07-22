@@ -4,6 +4,8 @@ RUN apt-get update && apt-get install -y \
     python3 \
     make \
     g++ \
+    pkg-config \
+    libsqlite3-dev \
     chromium \
     ca-certificates \
     fonts-liberation \
@@ -33,7 +35,11 @@ ENV DBUS_SESSION_BUS_ADDRESS=/dev/null
 WORKDIR /app
 
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
+
+# Install deps without postinstall, then rebuild native modules explicitly
+RUN npm ci --omit=dev --ignore-scripts \
+    && npm rebuild better-sqlite3 \
+    && node -e "require('better-sqlite3')"
 
 COPY . .
 RUN node scripts/patch-whatsapp.js
