@@ -1,5 +1,6 @@
 const $ = (s) => document.querySelector(s);
 const PAGE = 50;
+const APP_VERSION = 8;
 
 const state = {
   chats: [],
@@ -53,8 +54,19 @@ function toast(msg, type = 'success') {
   setTimeout(() => els.toast.classList.add('hidden'), 4000);
 }
 
+function normalizeChats(data) {
+  const raw = Array.isArray(data) ? data : (data?.chats || []);
+  return raw
+    .filter((c) => c && c.id)
+    .map((c) => ({
+      id: String(c.id),
+      name: String(c.name || c.id.split('@')[0] || 'Unknown'),
+      isGroup: Boolean(c.isGroup),
+    }));
+}
+
 function filteredChats(term = '') {
-  const q = term.toLowerCase();
+  const q = term.toLowerCase().trim();
   return state.chats.filter((c) => {
     if (q && !c.name.toLowerCase().includes(q)) return false;
     if (state.filter === 'groups') return c.isGroup;
@@ -69,21 +81,22 @@ function renderChats(term = '') {
   const dms = list.filter((c) => !c.isGroup);
 
   if (state.chats.length) {
-    els.chatSummary.textContent = `${state.chats.length} contacts · ${groups.length} groups · ${dms.length} chats`;
+    els.chatSummary.textContent = `${list.length} shown · ${groups.length} groups · ${dms.length} chats`;
   } else {
-    els.chatSummary.textContent = state.loading ? 'Loading contacts...' : 'Connect WhatsApp to load contacts';
+    els.chatSummary.textContent = state.loading ? 'Loading chats...' : 'Connect WhatsApp to load your chats';
   }
 
   if (!list.length) {
     const msg = state.chats.length
-      ? 'No matches for your search'
+      ? 'No matches — try a different search'
       : state.conn === 'ready'
-        ? 'Loading contacts... tap Refresh if empty'
+        ? 'No chats yet — tap Refresh'
         : state.conn === 'qr'
           ? 'Scan the QR code first'
           : 'Click Connect WhatsApp above';
     els.chatList.innerHTML = `<p class="placeholder">${msg}</p>`;
     state.visibleChats = [];
+    els.selectedCount.textContent = '0 chats selected';
     return;
   }
 
@@ -91,26 +104,30 @@ function renderChats(term = '') {
   const shown = ordered.slice(0, state.visible);
   state.visibleChats = shown;
 
-  let html = '';
+  const parts = [];
   for (let i = 0; i < shown.length; i++) {
     const c = shown[i];
     const sel = state.selected.has(c.id);
-    html += `<div class="chat-item${sel ? ' selected' : ''}" data-idx="${i}" role="button" tabindex="0">
-      <span class="tick-box" aria-hidden="true">${sel ? '✓' : ''}</span>
-      <div class="chat-info">
-        <span class="chat-name">${esc(c.name)}</span>
-        <span class="chat-meta">${c.isGroup ? 'Group' : 'Chat'}</span>
-      </div>
-    </div>`;
+    parts.push(
+      `<div class="chat-item${sel ? ' selected' : ''}" data-idx="${i}" role="button" tabindex="0">` +
+        `<span class="tick-box">${sel ? '✓' : ''}</span>` +
+        `<div class="chat-info">` +
+          `<span class="chat-name">${esc(c.name)}</span>` +
+          `<span class="chat-meta">${c.isGroup ? 'Group' : 'Chat'}</span>` +
+        `</div>` +
+      `</div>`
+    );
   }
 
   if (ordered.length > state.visible) {
     const left = ordered.length - state.visible;
-    html += `<button type="button" class="btn btn-ghost btn-sm load-more">Show ${Math.min(left, PAGE)} more (${left} left)</button>`;
+    parts.push(
+      `<button type="button" class="btn btn-ghost btn-sm load-more">Show ${Math.min(left, PAGE)} more (${left} left)</button>`
+    );
   }
 
-  els.chatList.innerHTML = html;
-  els.selectedCount.textContent = `${state.selected.size} contact${state.selected.size !== 1 ? 's' : ''} selected`;
+  els.chatList.innerHTML = parts.join('');
+  els.selectedCount.textContent = `${state.selected.size} chat${state.selected.size !== 1 ? 's' : ''} selected`;
 }
 
 function scrollToChats() {
@@ -132,10 +149,10 @@ function setConn(data) {
   const labels = {
     disconnected: 'Disconnected',
     connecting: 'Starting...',
-    qr: 'Scan QR Code with phone',
+    qr: 'Scan QR Code',
     authenticated: 'QR scanned — syncing...',
     ready: data.connectedInfo ? `Connected as ${data.connectedInfo.pushname}` : 'Connected',
-    auth_failure: 'Auth failed — try again',
+    auth_failure: 'Auth failed',
   };
   els.statusDot.className = `status-dot ${data.state}`;
   els.statusText.textContent = labels[data.state] || data.state;
@@ -148,7 +165,7 @@ function setConn(data) {
     els.qrOverlay.classList.add('hidden');
     els.connectBtn.textContent = 'Disconnect';
     if (!wasReady) {
-      toast(`Connected! Loading contacts...`);
+      toast('Connected! Loading your chats...');
       loadChats(true);
     } else {
       renderChats(els.chatSearch.value);
@@ -170,9 +187,7 @@ async function getStatus() {
     const data = await (await apiFetch('/api/status')).json();
     setConn(data);
     if (['connecting', 'qr', 'authenticated'].includes(data.state)) startPoll();
-    if (data.state === 'ready' && !state.chats.length && !state.loading) {
-      loadChats(true);
-    }
+    if (data.state === 'ready' && !state.chats.length && !state.loading) loadChats(true);
   } catch {
     setConn({ state: 'disconnected' });
   }
@@ -203,12 +218,11 @@ async function toggleConnect() {
     const data = await (await apiFetch('/api/status')).json();
 
     if (data.state === 'ready') {
-      els.statusText.textContent = 'Disconnecting...';
       await apiFetch('/api/disconnect', { method: 'POST' });
       state.chats = [];
       state.visibleChats = [];
       state.selected.clear();
-      toast('Disconnected — you must scan QR to connect again');
+      toast('Disconnected');
       return getStatus();
     }
 
@@ -218,23 +232,14 @@ async function toggleConnect() {
       return;
     }
 
-    els.statusText.textContent = 'Starting — QR will appear...';
     const res = await apiFetch('/api/connect', { method: 'POST' });
     const body = await res.json();
-
     if (!res.ok) {
       toast(body.error || 'Connect failed', 'error');
       return getStatus();
     }
-
     setConn(body);
-    if (body.qr) {
-      toast('Scan the QR code with WhatsApp → Linked Devices');
-    } else if (body.state === 'ready') {
-      toast('Connected without QR — if this is wrong, disconnect and try again', 'error');
-    } else {
-      toast('Waiting for QR code...');
-    }
+    toast(body.qr ? 'Scan QR with WhatsApp → Linked Devices' : 'Waiting for QR...');
     startPoll();
   } finally {
     els.connectBtn.disabled = false;
@@ -247,22 +252,27 @@ async function loadChats(refresh = false, attempt = 1) {
 
   state.loading = true;
   state.visible = PAGE;
-  els.chatList.innerHTML = `<p class="placeholder">Loading contacts... (${attempt})</p>`;
+  els.chatList.innerHTML = `<p class="placeholder">Loading chats... (${attempt})</p>`;
 
   try {
-    const needsRefresh = refresh || attempt > 1;
-    const url = `/api/chats?refresh=${needsRefresh ? 1 : 0}`;
+    const url = `/api/chats?refresh=${refresh || attempt > 1 ? 1 : 0}`;
     const res = await apiFetch(url);
     const body = await res.json();
+    if (!res.ok) throw new Error(body.error || 'Failed to load chats');
 
-    if (!res.ok) throw new Error(body.error || 'Failed to load contacts');
+    state.chats = normalizeChats(body);
 
-    state.chats = Array.isArray(body) ? body : [];
+    if (state.chats.length > 500) {
+      console.warn(`Trimming ${state.chats.length} to 500 chat-history items`);
+      state.chats = state.chats.slice(0, 500);
+      toast('Showing your most recent 500 chats', 'error');
+    }
+
     renderChats(els.chatSearch.value);
     scrollToChats();
 
     if (state.chats.length > 0) {
-      toast(`Loaded ${state.chats.length} contacts`);
+      toast(`Loaded ${state.chats.length} chats — tap to select`);
       return;
     }
 
@@ -272,8 +282,7 @@ async function loadChats(refresh = false, attempt = 1) {
       return loadChats(true, attempt + 1);
     }
 
-    els.chatList.innerHTML = '<p class="placeholder">No contacts found — tap Refresh or reconnect</p>';
-    toast('No contacts loaded — try Refresh', 'error');
+    els.chatList.innerHTML = '<p class="placeholder">No chats found — tap Refresh</p>';
   } catch (e) {
     if (attempt < 8) {
       await new Promise((r) => setTimeout(r, 4000));
@@ -339,7 +348,7 @@ async function submitPoll(now = false) {
   const chatIds = [...state.selected];
   if (!question) return toast('Enter a question', 'error');
   if (options.length < 2) return toast('Need 2+ options', 'error');
-  if (!chatIds.length) return toast('Select at least one contact', 'error');
+  if (!chatIds.length) return toast('Select at least one chat', 'error');
 
   const scheduledAt = now ? null : new Date(els.scheduledAt.value).toISOString();
   if (!now && (!scheduledAt || Number.isNaN(Date.parse(scheduledAt)))) {
@@ -350,9 +359,7 @@ async function submitPoll(now = false) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      question,
-      options,
-      chatIds,
+      question, options, chatIds,
       allowMultiple: els.allowMultiple.checked,
       scheduledAt,
       humanDelayMin: +els.delayMin.value,
@@ -391,16 +398,6 @@ els.chatList.addEventListener('click', (e) => {
   const row = e.target.closest('.chat-item');
   if (!row) return;
   const idx = parseInt(row.dataset.idx, 10);
-  if (Number.isNaN(idx)) return;
-  toggleChatSelection(idx);
-});
-
-els.chatList.addEventListener('keydown', (e) => {
-  if (e.key !== 'Enter' && e.key !== ' ') return;
-  const row = e.target.closest('.chat-item');
-  if (!row) return;
-  e.preventDefault();
-  const idx = parseInt(row.dataset.idx, 10);
   if (!Number.isNaN(idx)) toggleChatSelection(idx);
 });
 
@@ -414,10 +411,33 @@ document.querySelectorAll('.chat-filter').forEach((btn) => {
   };
 });
 
+async function checkVersion() {
+  try {
+    const v = await (await apiFetch('/api/version')).json();
+    if (v.version !== String(APP_VERSION)) {
+      document.getElementById('versionBanner').textContent =
+        '⚠ Old version cached — hard refresh (Ctrl+Shift+R)';
+      document.getElementById('versionBanner').style.background = '#ea4335';
+    }
+  } catch { /* ignore */ }
+}
+
 const sched = new Date();
 sched.setMinutes(sched.getMinutes() + 30);
 sched.setSeconds(0);
 els.scheduledAt.value = sched.toISOString().slice(0, 16);
 renderOptions();
+checkVersion();
 getStatus();
 loadPolls();
+
+// Demo render test — verify list works with sample data in console
+window.__testChatRender = () => {
+  state.chats = [
+    { id: '1@g.us', name: 'Test Group A', isGroup: true },
+    { id: '2@c.us', name: 'Test Contact B', isGroup: false },
+    { id: '3@g.us', name: 'Test Group C', isGroup: true },
+  ];
+  state.conn = 'ready';
+  renderChats();
+};

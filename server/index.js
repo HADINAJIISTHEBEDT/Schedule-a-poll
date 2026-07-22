@@ -12,9 +12,19 @@ const HOST = process.env.HOST || '0.0.0.0';
 app.use(express.json());
 app.use((_req, res, next) => {
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+  res.set('Pragma', 'no-cache');
   next();
 });
-app.use(express.static(path.join(__dirname, '..', 'public')));
+
+app.get('/api/version', (_req, res) => {
+  res.json({ version: '8', build: '2026-07-22' });
+});
+
+app.get('/', (_req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
+});
+
+app.use(express.static(path.join(__dirname, '..', 'public'), { index: false }));
 
 const apkPath = path.join(__dirname, '..', 'releases', 'poll-scheduler.apk');
 
@@ -82,6 +92,7 @@ app.post('/api/disconnect', async (_req, res) => {
 
 app.get('/api/chats', async (req, res) => {
   try {
+    // Chat history only — never load full phonebook (contacts=1 ignored)
     const refresh = req.query.refresh === '1';
     const chats = await whatsapp.getChats({ refresh });
     res.json(chats);

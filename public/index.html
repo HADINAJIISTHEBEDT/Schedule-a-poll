@@ -3,13 +3,68 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <title>Poll Scheduler — WhatsApp</title>
-  <link rel="stylesheet" href="/css/style.css?v=7" />
+  <style>
+    /* Critical: force contacts visible on mobile (fixes invisible list bug) */
+    #chatList {
+      display: block !important;
+      max-height: 60vh;
+      min-height: 220px;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      background: #1a2730;
+      border: 1px solid #2a3942;
+      border-radius: 8px;
+    }
+    .chat-item {
+      display: flex !important;
+      flex-direction: row !important;
+      align-items: center !important;
+      width: 100% !important;
+      gap: 14px;
+      padding: 14px 16px;
+      border-bottom: 1px solid #2a3942;
+      min-height: 56px;
+      box-sizing: border-box;
+      cursor: pointer;
+    }
+    .chat-name {
+      display: block !important;
+      color: #e9edef !important;
+      font-size: 16px !important;
+      font-weight: 600 !important;
+    }
+    .tick-box {
+      width: 28px;
+      height: 28px;
+      min-width: 28px;
+      border: 2px solid #00a884;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      color: #fff;
+      flex-shrink: 0;
+    }
+    .chat-item.selected .tick-box { background: #00a884; }
+    #versionBanner {
+      background: #00a884;
+      color: #fff;
+      text-align: center;
+      padding: 8px;
+      font-size: 13px;
+      font-weight: 600;
+    }
+  </style>
+  <link rel="stylesheet" href="/css/style.css?v=8" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
 </head>
 <body>
+  <div id="versionBanner">✓ Version 8 — tap contacts below to select</div>
   <div class="app">
     <header class="header">
       <div class="header-brand">
@@ -20,7 +75,6 @@
         </div>
       </div>
       <div class="connection-panel">
-        <button type="button" class="btn btn-ghost btn-sm hidden" id="serverSettingsBtn" title="Server">⚙️</button>
         <span class="status-dot" id="statusDot"></span>
         <span id="statusText">Disconnected</span>
         <button class="btn btn-sm" id="connectBtn">Connect WhatsApp</button>
@@ -38,21 +92,21 @@
 
     <main class="main">
       <section class="card" id="chatSelectSection">
-        <h2>Select Contacts</h2>
+        <h2>Select Chats to Send Poll</h2>
         <div class="chat-filters">
           <button type="button" class="chat-filter active" data-filter="all">All</button>
           <button type="button" class="chat-filter" data-filter="groups">Groups</button>
           <button type="button" class="chat-filter" data-filter="chats">Chats</button>
         </div>
         <div class="chat-search">
-          <input type="text" id="chatSearch" placeholder="Search..." />
+          <input type="text" id="chatSearch" placeholder="Search chats..." />
           <button type="button" class="btn btn-ghost btn-sm" id="refreshChatsBtn">Refresh</button>
         </div>
-        <p class="chat-summary" id="chatSummary">Connect WhatsApp to load contacts</p>
+        <p class="chat-summary" id="chatSummary">Connect WhatsApp to load your chats</p>
         <div class="chat-list" id="chatList">
           <p class="placeholder">Click Connect WhatsApp above</p>
         </div>
-        <p class="selected-count" id="selectedCount">0 contacts selected</p>
+        <p class="selected-count" id="selectedCount">0 chats selected</p>
       </section>
 
       <section class="card">
@@ -103,7 +157,7 @@
     <div class="toast hidden" id="toast"></div>
   </div>
 
-  <script src="/js/config.js?v=7"></script>
-  <script src="/js/app.js?v=7"></script>
+  <script src="/js/config.js?v=8"></script>
+  <script src="/js/app.js?v=8"></script>
 </body>
 </html>

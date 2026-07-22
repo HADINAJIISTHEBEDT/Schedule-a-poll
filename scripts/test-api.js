@@ -37,11 +37,12 @@ async function run() {
     const html = await res.text();
     assert(res.ok, `status ${res.status}`);
     assert(html.includes('Poll Scheduler'), 'missing title');
-    assert(html.includes('app.js?v=7'), 'missing cache bust v=7');
+    assert(html.includes('app.js?v=8'), 'missing cache bust v=8');
+    assert(html.includes('Version 8'), 'missing version banner');
   });
 
   await runTest('CSS has vertical chat list layout', async () => {
-    const res = await fetch(`${BASE}/css/style.css?v=7`);
+    const res = await fetch(`${BASE}/css/style.css?v=8`);
     const css = await res.text();
     assert(res.ok, `status ${res.status}`);
     assert(css.includes('flex-direction: column'), 'chat list not vertical');

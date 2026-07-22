@@ -77,6 +77,8 @@ async function fetchChatsDirect() {
     for (const chat of chats) {
       const id = chat.id?._serialized || String(chat.id);
       if (!id || seen.has(id)) continue;
+      // Chat history only — skip broadcasts, status, newsletters
+      if (id.includes('@broadcast') || id.includes('status@')) continue;
 
       const isGroup = Boolean(chat.groupMetadata) || id.endsWith('@g.us');
       const isAnnounceOnly = Boolean(chat.groupMetadata?.announce);
