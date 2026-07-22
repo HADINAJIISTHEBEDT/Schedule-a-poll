@@ -6,7 +6,16 @@ const whatsapp = require('./whatsapp');
 const scheduler = require('./scheduler');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = Number(process.env.PORT) || 3000;
+const HOST = process.env.HOST || '0.0.0.0';
+
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught exception:', err);
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled rejection:', reason);
+});
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '..', 'public')));
@@ -31,15 +40,17 @@ app.get('/api/status', (_req, res) => {
   res.json(whatsapp.getStatus());
 });
 
-app.post('/api/connect', async (_req, res) => {
+app.post('/api/connect', async (req, res) => {
   try {
     if (whatsapp.isReady()) {
-      return res.json({ ok: true, message: 'Already connected' });
+      return res.json({ ok: true, message: 'Already connected', ...whatsapp.getStatus() });
     }
-    await whatsapp.initialize();
-    res.json({ ok: true, message: 'Connecting — scan the QR code' });
+    const force = req.body?.force === true || req.query.force === '1';
+    await whatsapp.initialize({ force });
+    res.json({ ok: true, message: 'Connecting — scan the QR code', ...whatsapp.getStatus() });
   } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
+    console.error('POST /api/connect error:', err.message);
+    res.status(500).json({ ok: false, error: err.message, ...whatsapp.getStatus() });
   }
 });
 
@@ -145,10 +156,7 @@ app.post('/api/polls/:id/send-now', async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`Poll Scheduler running at http://localhost:${PORT}`);
+app.listen(PORT, HOST, () => {
+  console.log(`Poll Scheduler running at http://${HOST}:${PORT}`);
   scheduler.start();
-  whatsapp.initialize().catch((err) => {
-    console.error('WhatsApp init error:', err.message);
-  });
 });

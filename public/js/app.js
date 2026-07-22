@@ -27,6 +27,8 @@ const els = {
   allowMultiple: $('#allowMultiple'),
   chatSearch: $('#chatSearch'),
   chatList: $('#chatList'),
+  qrPanel: $('#qrPanel'),
+  qrInlineImage: $('#qrInlineImage'),
   chatSummary: $('#chatSummary'),
   refreshChatsBtn: $('#refreshChatsBtn'),
   selectedCount: $('#selectedCount'),
@@ -47,6 +49,8 @@ const els = {
 
 let searchTimer = null;
 let chatCounts = { groups: 0, contacts: 0 };
+let lastQrUrl = null;
+let statusPollTimer = null;
 
 function showToast(message, type = 'success') {
   els.toast.textContent = message;
@@ -110,7 +114,19 @@ function renderChats(filter = '') {
   updateChatSummary();
 
   if (filtered.length === 0) {
-    els.chatList.innerHTML = `<p class="placeholder">${state.chats.length ? 'No chats match your search' : 'Connect WhatsApp, then tap Load chats'}</p>`;
+    const emptyMessage =
+      state.connectionState === 'ready'
+        ? 'No chats loaded yet. Tap Refresh above.'
+        : state.connectionState === 'qr'
+          ? 'Scan the QR code below with your phone.'
+          : state.connectionState === 'authenticated' || state.connectionState === 'connecting'
+            ? 'Waiting for QR code...'
+            : 'Click Connect WhatsApp above to load your chats';
+    let html = `<p class="placeholder">${state.chats.length ? 'No chats match your search' : emptyMessage}</p>`;
+    if (lastQrUrl && (state.connectionState === 'qr' || state.connectionState === 'connecting')) {
+      html += `<div class="qr-inline"><img src="${lastQrUrl}" alt="WhatsApp QR code" /></div>`;
+    }
+    els.chatList.innerHTML = html;
     return;
   }
 
@@ -193,6 +209,20 @@ function toLocalDatetime(date) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
+function showQrOverlay(qr) {
+  if (!qr) return;
+  lastQrUrl = qr;
+  els.qrImage.src = qr;
+  els.qrOverlay.classList.remove('hidden');
+  if (els.qrInlineImage) els.qrInlineImage.src = qr;
+  if (els.qrPanel) els.qrPanel.classList.remove('hidden');
+}
+
+function hideQrOverlay() {
+  els.qrOverlay.classList.add('hidden');
+  if (els.qrPanel) els.qrPanel.classList.add('hidden');
+}
+
 function updateConnectionUI({ state: connState, qr, connectedInfo }) {
   const wasReady = state.connectionState === 'ready';
   state.connectionState = connState;
@@ -210,24 +240,35 @@ function updateConnectionUI({ state: connState, qr, connectedInfo }) {
   els.statusText.textContent = labels[connState] || connState;
 
   if (connState === 'qr' && qr) {
-    els.qrImage.src = qr;
-    els.qrOverlay.classList.remove('hidden');
+    showQrOverlay(qr);
+    renderChats();
+  } else if (connState === 'ready') {
+    hideQrOverlay();
+  } else if (connState === 'connecting' || connState === 'authenticated') {
+    if (lastQrUrl && els.qrInlineImage) {
+      els.qrInlineImage.src = lastQrUrl;
+      if (els.qrPanel) els.qrPanel.classList.remove('hidden');
+    }
+  } else if (connState === 'disconnected' || connState === 'auth_failure') {
+    hideQrOverlay();
+    lastQrUrl = null;
   }
 
   if (connState === 'ready') {
-    els.qrOverlay.classList.add('hidden');
     els.connectBtn.textContent = 'Disconnect';
     if (!wasReady && !state.chatsLoaded && !state.loadingChats) {
-      loadChats(false);
+      loadChats(true);
     }
   } else {
-    els.connectBtn.textContent = connState === 'disconnected' ? 'Connect WhatsApp' : 'Connecting...';
+    els.connectBtn.textContent =
+      connState === 'qr' ? 'Show QR Code' : connState === 'disconnected' ? 'Connect WhatsApp' : 'Connecting...';
     if (connState === 'disconnected') {
       state.chatsLoaded = false;
       state.contactsLoaded = false;
       state.chats = [];
       chatCounts = { groups: 0, contacts: 0 };
     }
+    renderChats();
   }
 }
 
@@ -236,6 +277,9 @@ async function fetchStatus() {
     const res = await apiFetch('/api/status');
     const data = await res.json();
     updateConnectionUI(data);
+    if (data.state === 'connecting' || data.state === 'qr' || data.state === 'authenticated') {
+      pollStatus();
+    }
   } catch {
     updateConnectionUI({ state: 'disconnected' });
   }
@@ -256,20 +300,48 @@ async function connect() {
     return fetchStatus();
   }
 
-  await apiFetch('/api/connect', { method: 'POST' });
-  showToast('Connecting — scan the QR code');
+  if (status.state === 'qr') {
+    updateConnectionUI(status);
+    showToast('Scan the QR code with your phone');
+    pollStatus();
+    return;
+  }
+
+  const connectRes = await apiFetch('/api/connect', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ force: status.state === 'connecting' && !status.qr }),
+  });
+  const connectData = await connectRes.json();
+  if (!connectRes.ok) {
+    showToast(connectData.error || 'Failed to connect', 'error');
+    return;
+  }
+  updateConnectionUI(connectData);
+  showToast(connectData.qr ? 'Scan the QR code' : 'Connecting — waiting for QR code...');
   pollStatus();
 }
 
 function pollStatus() {
-  const interval = setInterval(async () => {
-    const res = await apiFetch('/api/status');
-    const data = await res.json();
-    updateConnectionUI(data);
-    if (data.state === 'ready' || data.state === 'disconnected' || data.state === 'auth_failure') {
-      clearInterval(interval);
+  if (statusPollTimer) clearInterval(statusPollTimer);
+
+  const tick = async () => {
+    try {
+      const res = await apiFetch('/api/status');
+      const data = await res.json();
+      updateConnectionUI(data);
+      if (data.state === 'ready' || data.state === 'disconnected' || data.state === 'auth_failure') {
+        clearInterval(statusPollTimer);
+        statusPollTimer = null;
+      }
+    } catch {
+      clearInterval(statusPollTimer);
+      statusPollTimer = null;
     }
-  }, 3000);
+  };
+
+  tick();
+  statusPollTimer = setInterval(tick, 1000);
 }
 
 function needsContacts() {
@@ -287,19 +359,25 @@ async function loadChats(refresh = false) {
   try {
     const params = new URLSearchParams();
     if (refresh) params.set('refresh', '1');
-    if (refresh && needsContacts()) params.set('contacts', '1');
+    if (needsContacts()) params.set('contacts', '1');
 
     const res = await apiFetch(`/api/chats?${params}`);
     if (!res.ok) throw new Error((await res.json()).error || 'Failed to load chats');
 
     state.chats = await res.json();
-    state.chatsLoaded = true;
-    state.contactsLoaded = refresh && needsContacts();
+    state.chatsLoaded = state.chats.length > 0;
+    state.contactsLoaded = needsContacts() && state.chats.some((c) => !c.isGroup);
     chatCounts = {
       groups: state.chats.filter((c) => c.isGroup).length,
       contacts: state.chats.filter((c) => !c.isGroup).length,
     };
     renderChats(els.chatSearch.value);
+
+    if (!state.chats.length && state.connectionState === 'ready' && !refresh) {
+      state.loadingChats = false;
+      await new Promise((r) => setTimeout(r, 2000));
+      return loadChats(true);
+    }
   } catch (err) {
     els.chatList.innerHTML = '<p class="placeholder">Could not load chats. Tap Refresh to try again.</p>';
     showToast(err.message || 'Failed to load chats', 'error');
@@ -546,6 +624,10 @@ els.serverSettingsBtn.addEventListener('click', openServerSettings);
 els.saveServerBtn.addEventListener('click', saveServerSettings);
 els.closeServerBtn.addEventListener('click', closeServerSettings);
 
+if (!isCapacitorApp()) {
+  els.serverSettingsBtn.classList.add('hidden');
+}
+
 renderOptions();
 setDefaultSchedule();
 if (isCapacitorApp() && !getApiBase()) {
@@ -558,11 +640,17 @@ if (isCapacitorApp() && !getApiBase()) {
 setInterval(() => {
   if (document.hidden) return;
   fetchStatus();
+  if (state.connectionState === 'ready' && !state.chats.length && !state.loadingChats) {
+    loadChats(true);
+  }
 }, 30000);
 
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) {
     fetchStatus();
     loadPolls();
+    if (state.connectionState === 'ready' && !state.chats.length) {
+      loadChats(true);
+    }
   }
 });

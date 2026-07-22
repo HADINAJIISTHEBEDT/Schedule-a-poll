@@ -1,7 +1,23 @@
 const { Client, LocalAuth, Poll } = require('whatsapp-web.js');
 const qrcode = require('qrcode');
+const fs = require('fs');
 const path = require('path');
 const { humanLikeDelay, staggeredChatDelay, sleep, randomBetween } = require('./humanSend');
+
+const CHROME_CANDIDATES = [
+  process.env.PUPPETEER_EXECUTABLE_PATH,
+  '/usr/bin/chromium',
+  '/usr/local/bin/google-chrome',
+  '/usr/bin/google-chrome',
+  '/usr/bin/chromium-browser',
+].filter(Boolean);
+
+function resolveChromePath() {
+  for (const candidate of CHROME_CANDIDATES) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return undefined;
+}
 
 let client = null;
 let connectionState = 'disconnected';
@@ -12,7 +28,9 @@ let cachedChats = [];
 let cachedContacts = null;
 let chatsLoading = false;
 let chatsCacheTime = 0;
+let connectingSince = 0;
 const CHATS_CACHE_TTL = 5 * 60 * 1000;
+const CONNECTING_TIMEOUT_MS = 45 * 1000;
 
 function formatChat(chat) {
   const name = chat.name || chat.id?.user || chat.id?._serialized || 'Unknown chat';
@@ -127,23 +145,27 @@ async function fetchAndCacheChats({ refresh = false, includeContacts = false } =
 
   let lastError = null;
 
-  for (let attempt = 1; attempt <= 2; attempt++) {
+  for (let attempt = 1; attempt <= 4; attempt++) {
     try {
-      cachedChats = await fetchChatsDirect({ includeContacts: false });
-      chatsCacheTime = Date.now();
+      const chats = await fetchChatsDirect({ includeContacts: false });
+      if (chats.length > 0) {
+        cachedChats = chats;
+        chatsCacheTime = Date.now();
 
-      if (includeContacts) {
-        cachedContacts = (await fetchChatsDirect({ includeContacts: true })).filter((c) => !c.isGroup);
-        return mergeChatLists(cachedChats, cachedContacts);
+        if (includeContacts) {
+          cachedContacts = (await fetchChatsDirect({ includeContacts: true })).filter((c) => !c.isGroup);
+          return mergeChatLists(cachedChats, cachedContacts);
+        }
+
+        return cachedChats;
       }
-
-      return cachedChats;
     } catch (err) {
       lastError = err;
-      console.error(`Chat fetch attempt ${attempt}/2 failed:`, err.message);
-      if (attempt < 2) {
-        await new Promise((r) => setTimeout(r, 1000));
-      }
+      console.error(`Chat fetch attempt ${attempt}/4 failed:`, err.message);
+    }
+
+    if (attempt < 4) {
+      await new Promise((r) => setTimeout(r, 1500 * attempt));
     }
   }
 
@@ -183,9 +205,24 @@ function getStatus() {
   };
 }
 
-async function initialize() {
-  if (client) return;
+async function initialize({ force = false } = {}) {
+  const connectingTimedOut =
+    connectionState === 'connecting' &&
+    connectingSince > 0 &&
+    Date.now() - connectingSince > CONNECTING_TIMEOUT_MS;
 
+  if (client && !force && !connectingTimedOut) {
+    if (connectionState === 'ready') return;
+    if (connectionState === 'qr' && lastQrDataUrl) return;
+    if (connectionState === 'authenticated') return;
+    if (connectionState === 'connecting') return;
+  }
+
+  if (client) {
+    await disconnect();
+  }
+
+  connectingSince = Date.now();
   client = new Client({
     authStrategy: new LocalAuth({
       dataPath: path.join(__dirname, '..', 'data', 'whatsapp-session'),
@@ -197,7 +234,7 @@ async function initialize() {
     },
     puppeteer: {
       headless: true,
-      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+      executablePath: resolveChromePath(),
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
@@ -210,10 +247,15 @@ async function initialize() {
   });
 
   client.on('qr', async (qr) => {
-    connectionState = 'qr';
-    lastQr = qr;
-    lastQrDataUrl = await qrcode.toDataURL(qr);
-    emit('qr', lastQrDataUrl);
+    try {
+      connectionState = 'qr';
+      connectingSince = 0;
+      lastQr = qr;
+      lastQrDataUrl = await qrcode.toDataURL(qr);
+      emit('qr', lastQrDataUrl);
+    } catch (err) {
+      console.error('QR handler error:', err.message);
+    }
   });
 
   client.on('authenticated', () => {
@@ -239,6 +281,19 @@ async function initialize() {
     }
 
     emit('ready', connectedInfo);
+
+    // Load chats immediately on ready — waiting too long can return an empty list
+    chatsLoading = true;
+    fetchAndCacheChats({ refresh: true, includeContacts: true })
+      .then((chats) => {
+        console.log(`Preloaded ${chats.length} chats`);
+      })
+      .catch((err) => {
+        console.error('Initial chat preload failed:', err.message);
+      })
+      .finally(() => {
+        chatsLoading = false;
+      });
   });
 
   client.on('disconnected', (reason) => {
@@ -254,7 +309,15 @@ async function initialize() {
   });
 
   connectionState = 'connecting';
-  await client.initialize();
+  connectingSince = Date.now();
+  try {
+    await client.initialize();
+  } catch (err) {
+    connectionState = 'disconnected';
+    connectingSince = 0;
+    client = null;
+    throw err;
+  }
 }
 
 async function disconnect() {
@@ -267,6 +330,7 @@ async function disconnect() {
   cachedChats = [];
   cachedContacts = null;
   chatsCacheTime = 0;
+  connectingSince = 0;
   lastQr = null;
   lastQrDataUrl = null;
 }
@@ -277,7 +341,8 @@ async function getChats({ refresh = false, includeContacts = false } = {}) {
   }
 
   if (!refresh && cachedChats.length > 0) {
-    return cachedChats;
+    if (!includeContacts) return cachedChats;
+    if (cachedContacts) return mergeChatLists(cachedChats, cachedContacts);
   }
 
   if (chatsLoading) {

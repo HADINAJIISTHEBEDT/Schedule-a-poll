@@ -80,6 +80,13 @@
 
         <div class="form-group">
           <label>Select Chats</label>
+          <div id="qrPanel" class="qr-panel hidden">
+            <p class="qr-panel-title">Scan this QR code with WhatsApp</p>
+            <div class="qr-inline">
+              <img id="qrInlineImage" alt="WhatsApp QR code" />
+            </div>
+            <p class="hint">WhatsApp → Linked Devices → Link a Device</p>
+          </div>
           <div class="chat-filters">
             <button type="button" class="chat-filter active" data-filter="all">All</button>
             <button type="button" class="chat-filter" data-filter="groups">Groups</button>
