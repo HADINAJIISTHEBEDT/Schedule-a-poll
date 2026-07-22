@@ -76,6 +76,19 @@ app.get('/api/chats', async (req, res) => {
   }
 });
 
+app.get('/api/chats/search', async (req, res) => {
+  try {
+    const query = String(req.query.q || '').trim();
+    const filter = req.query.type || 'all';
+    const includeContacts = filter !== 'groups';
+    const chats = await whatsapp.searchChats({ query, filter, includeContacts });
+    res.json(chats);
+  } catch (err) {
+    console.error('GET /api/chats/search error:', err.message);
+    res.status(400).json({ error: err.message || 'Search failed' });
+  }
+});
+
 app.get('/api/polls', (_req, res) => {
   res.json(db.getAllPolls());
 });

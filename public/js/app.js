@@ -1,17 +1,14 @@
 const $ = (sel) => document.querySelector(sel);
 
-const PAGE_SIZE = 40;
-
 const state = {
-  chats: [],
+  searchResults: [],
   selectedChats: new Set(),
+  selectedChatMeta: new Map(),
   options: ['', ''],
   chatFilter: 'all',
-  visibleCount: PAGE_SIZE,
-  contactsLoaded: false,
-  chatsLoaded: false,
   connectionState: 'disconnected',
-  loadingChats: false,
+  searching: false,
+  lastSearchQuery: '',
 };
 
 const els = {
@@ -30,7 +27,6 @@ const els = {
   qrPanel: $('#qrPanel'),
   qrInlineImage: $('#qrInlineImage'),
   chatSummary: $('#chatSummary'),
-  refreshChatsBtn: $('#refreshChatsBtn'),
   selectedCount: $('#selectedCount'),
   scheduledAt: $('#scheduledAt'),
   delayMin: $('#delayMin'),
@@ -48,7 +44,6 @@ const els = {
 };
 
 let searchTimer = null;
-let chatCounts = { groups: 0, contacts: 0 };
 let lastQrUrl = null;
 let statusPollTimer = null;
 
@@ -90,106 +85,121 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
-function getFilteredChats(term = '') {
-  const search = term.toLowerCase();
-  let filtered = state.chats;
-
-  if (search) {
-    filtered = filtered.filter((c) => c.name.toLowerCase().includes(search));
-  }
-
-  if (state.chatFilter === 'groups') {
-    filtered = filtered.filter((c) => c.isGroup);
-  } else if (state.chatFilter === 'contacts') {
-    filtered = filtered.filter((c) => !c.isGroup);
-  }
-
-  return filtered;
+function getSelectedChatsList() {
+  return [...state.selectedChats].map((id) => {
+    const meta = state.selectedChatMeta.get(id);
+    const fromSearch = state.searchResults.find((c) => c.id === id);
+    return fromSearch || meta || { id, name: 'Unknown chat', isGroup: false };
+  });
 }
 
-function renderChats(filter = '') {
-  const filtered = getFilteredChats(filter);
-  const groups = filtered.filter((c) => c.isGroup);
-  const contacts = filtered.filter((c) => !c.isGroup);
-  updateChatSummary();
+function renderChats() {
+  const query = els.chatSearch.value.trim();
+  updateChatSummary(query);
 
-  if (filtered.length === 0) {
+  const selected = getSelectedChatsList();
+  let html = '';
+
+  if (selected.length) {
+    html += `<div class="chat-section-title">Selected (${selected.length})</div>`;
+    html += selected
+      .map(
+        (chat) => `
+      <label class="chat-item selected" data-id="${chat.id}">
+        <input type="checkbox" checked />
+        <div>
+          <div class="chat-name">${escapeHtml(chat.name)}</div>
+          <div class="chat-meta">${chat.isGroup ? 'Group' : 'Contact'}</div>
+        </div>
+      </label>`
+      )
+      .join('');
+  }
+
+  if (state.connectionState !== 'ready') {
     const emptyMessage =
-      state.connectionState === 'ready'
-        ? 'No chats loaded yet. Tap Refresh above.'
-        : state.connectionState === 'qr'
-          ? 'Scan the QR code below with your phone.'
-          : state.connectionState === 'authenticated' || state.connectionState === 'connecting'
-            ? 'Waiting for QR code...'
-            : 'Click Connect WhatsApp above to load your chats';
-    let html = `<p class="placeholder">${state.chats.length ? 'No chats match your search' : emptyMessage}</p>`;
+      state.connectionState === 'qr'
+        ? 'Scan the QR code below with your phone.'
+        : state.connectionState === 'authenticated' || state.connectionState === 'connecting'
+          ? 'Waiting for QR code...'
+          : 'Connect WhatsApp above, then search for chats';
+    html += `<p class="placeholder">${emptyMessage}</p>`;
     if (lastQrUrl && (state.connectionState === 'qr' || state.connectionState === 'connecting')) {
       html += `<div class="qr-inline"><img src="${lastQrUrl}" alt="WhatsApp QR code" /></div>`;
     }
     els.chatList.innerHTML = html;
+    updateSelectedCount();
     return;
   }
 
-  const renderItem = (chat) => `
-    <label class="chat-item ${state.selectedChats.has(chat.id) ? 'selected' : ''}" data-id="${chat.id}">
-      <input type="checkbox" ${state.selectedChats.has(chat.id) ? 'checked' : ''} />
-      <div>
-        <div class="chat-name">${escapeHtml(chat.name)}</div>
-        <div class="chat-meta">${chat.isGroup ? 'Group' : 'Contact'}</div>
-      </div>
-    </label>`;
-
-  let list = [];
-  if (state.chatFilter === 'all') {
-    list = [...groups, ...contacts];
-  } else {
-    list = filtered;
+  if (query.length < 2) {
+    html += `<p class="placeholder">Search for a group or contact name (min. 2 characters)</p>`;
+    els.chatList.innerHTML = html;
+    updateSelectedCount();
+    return;
   }
 
-  const visible = list.slice(0, state.visibleCount);
-  let html = '';
-
-  if (state.chatFilter === 'all' && !filter) {
-    const visibleGroups = visible.filter((c) => c.isGroup);
-    const visibleContacts = visible.filter((c) => !c.isGroup);
-    if (visibleGroups.length) {
-      html += `<div class="chat-section-title">Groups (${groups.length})</div>`;
-      html += visibleGroups.map(renderItem).join('');
-    }
-    if (visibleContacts.length) {
-      html += `<div class="chat-section-title">Contacts (${contacts.length})</div>`;
-      html += visibleContacts.map(renderItem).join('');
-    }
-  } else {
-    html = visible.map(renderItem).join('');
+  if (state.searching) {
+    html += `<p class="placeholder">Searching...</p>`;
+    els.chatList.innerHTML = html;
+    return;
   }
 
-  if (list.length > state.visibleCount) {
-    const remaining = list.length - state.visibleCount;
-    html += `<button type="button" class="btn btn-ghost btn-sm load-more-chats">Show ${Math.min(remaining, PAGE_SIZE)} more (${remaining} left)</button>`;
+  if (!state.searchResults.length) {
+    html += `<p class="placeholder">No results for "${escapeHtml(query)}"</p>`;
+    els.chatList.innerHTML = html;
+    updateSelectedCount();
+    return;
+  }
+
+  const selectedIds = state.selectedChats;
+  const results = state.searchResults.filter((c) => !selectedIds.has(c.id));
+
+  if (results.length) {
+    html += `<div class="chat-section-title">Results (${results.length})</div>`;
+    html += results
+      .map(
+        (chat) => `
+      <label class="chat-item" data-id="${chat.id}">
+        <input type="checkbox" />
+        <div>
+          <div class="chat-name">${escapeHtml(chat.name)}</div>
+          <div class="chat-meta">${chat.isGroup ? 'Group' : 'Contact'}</div>
+        </div>
+      </label>`
+      )
+      .join('');
   }
 
   els.chatList.innerHTML = html;
   updateSelectedCount();
 }
 
-function updateChatSummary() {
-  if (!state.chats.length) {
-    els.chatSummary.textContent = state.loadingChats ? 'Loading...' : 'Tap Refresh to load chats';
+function updateChatSummary(query = '') {
+  if (state.connectionState !== 'ready') {
+    els.chatSummary.textContent = 'Connect WhatsApp to search chats';
     return;
   }
-  els.chatSummary.textContent = `${chatCounts.groups} groups · ${chatCounts.contacts} contacts`;
+  if (state.searching) {
+    els.chatSummary.textContent = 'Searching...';
+    return;
+  }
+  if (query.length < 2) {
+    els.chatSummary.textContent = 'Type a name to find groups or contacts';
+    return;
+  }
+  els.chatSummary.textContent = `${state.searchResults.length} result${state.searchResults.length !== 1 ? 's' : ''} found`;
 }
 
-function toggleChat(id, selected) {
-  if (selected) state.selectedChats.add(id);
-  else state.selectedChats.delete(id);
-  updateSelectedCount();
-  els.chatList.querySelectorAll(`.chat-item[data-id="${CSS.escape(id)}"]`).forEach((item) => {
-    item.classList.toggle('selected', selected);
-    const input = item.querySelector('input');
-    if (input) input.checked = selected;
-  });
+function toggleChat(id, selected, chatMeta = null) {
+  if (selected) {
+    state.selectedChats.add(id);
+    if (chatMeta) state.selectedChatMeta.set(id, chatMeta);
+  } else {
+    state.selectedChats.delete(id);
+    state.selectedChatMeta.delete(id);
+  }
+  renderChats();
 }
 
 function updateSelectedCount() {
@@ -224,7 +234,6 @@ function hideQrOverlay() {
 }
 
 function updateConnectionUI({ state: connState, qr, connectedInfo }) {
-  const wasReady = state.connectionState === 'ready';
   state.connectionState = connState;
   els.statusDot.className = `status-dot ${connState}`;
 
@@ -256,17 +265,13 @@ function updateConnectionUI({ state: connState, qr, connectedInfo }) {
 
   if (connState === 'ready') {
     els.connectBtn.textContent = 'Disconnect';
-    if (!wasReady && !state.chatsLoaded && !state.loadingChats) {
-      loadChats(true);
-    }
+    renderChats();
   } else {
     els.connectBtn.textContent =
       connState === 'qr' ? 'Show QR Code' : connState === 'disconnected' ? 'Connect WhatsApp' : 'Connecting...';
     if (connState === 'disconnected') {
-      state.chatsLoaded = false;
-      state.contactsLoaded = false;
-      state.chats = [];
-      chatCounts = { groups: 0, contacts: 0 };
+      state.searchResults = [];
+      state.lastSearchQuery = '';
     }
     renderChats();
   }
@@ -290,11 +295,11 @@ async function connect() {
 
   if (status.state === 'ready') {
     await apiFetch('/api/disconnect', { method: 'POST' });
-    state.chats = [];
+    state.searchResults = [];
     state.selectedChats.clear();
-    state.chatsLoaded = false;
-    state.contactsLoaded = false;
-    chatCounts = { groups: 0, contacts: 0 };
+    state.selectedChatMeta.clear();
+    state.lastSearchQuery = '';
+    els.chatSearch.value = '';
     renderChats();
     showToast('Disconnected');
     return fetchStatus();
@@ -357,65 +362,40 @@ function pollStatus() {
   statusPollTimer = setInterval(tick, 1000);
 }
 
-function needsContacts() {
-  return state.chatFilter === 'contacts' || state.chatFilter === 'all';
-}
+async function searchChats(query) {
+  const term = query.trim();
+  if (term.length < 2) {
+    state.searchResults = [];
+    state.lastSearchQuery = '';
+    renderChats();
+    return;
+  }
 
-async function loadChats(refresh = false) {
-  if (state.loadingChats) return;
+  if (state.connectionState !== 'ready') {
+    renderChats();
+    return;
+  }
 
-  state.loadingChats = true;
-  state.visibleCount = PAGE_SIZE;
-  els.chatList.innerHTML = '<p class="placeholder">Loading chats...</p>';
-  updateChatSummary();
+  state.searching = true;
+  state.lastSearchQuery = term;
+  renderChats();
 
   try {
-    const params = new URLSearchParams();
-    if (refresh) params.set('refresh', '1');
-    if (needsContacts()) params.set('contacts', '1');
+    const params = new URLSearchParams({ q: term, type: state.chatFilter });
+    const res = await apiFetch(`/api/chats/search?${params}`);
+    if (!res.ok) throw new Error((await res.json()).error || 'Search failed');
 
-    const res = await apiFetch(`/api/chats?${params}`);
-    if (!res.ok) throw new Error((await res.json()).error || 'Failed to load chats');
-
-    state.chats = await res.json();
-    state.chatsLoaded = state.chats.length > 0;
-    state.contactsLoaded = needsContacts() && state.chats.some((c) => !c.isGroup);
-    chatCounts = {
-      groups: state.chats.filter((c) => c.isGroup).length,
-      contacts: state.chats.filter((c) => !c.isGroup).length,
-    };
-    renderChats(els.chatSearch.value);
-
-    if (!state.chats.length && state.connectionState === 'ready' && !refresh) {
-      state.loadingChats = false;
-      await new Promise((r) => setTimeout(r, 2000));
-      return loadChats(true);
+    if (els.chatSearch.value.trim() === term) {
+      state.searchResults = await res.json();
     }
   } catch (err) {
-    els.chatList.innerHTML = '<p class="placeholder">Could not load chats. Tap Refresh to try again.</p>';
-    showToast(err.message || 'Failed to load chats', 'error');
+    if (els.chatSearch.value.trim() === term) {
+      state.searchResults = [];
+      showToast(err.message || 'Search failed', 'error');
+    }
   } finally {
-    state.loadingChats = false;
-  }
-}
-
-async function ensureContactsLoaded() {
-  if (state.contactsLoaded || state.loadingChats) return;
-  state.loadingChats = true;
-  try {
-    const res = await apiFetch('/api/chats?contacts=1');
-    if (!res.ok) throw new Error((await res.json()).error || 'Failed to load contacts');
-    state.chats = await res.json();
-    state.contactsLoaded = true;
-    chatCounts = {
-      groups: state.chats.filter((c) => c.isGroup).length,
-      contacts: state.chats.filter((c) => !c.isGroup).length,
-    };
-    renderChats(els.chatSearch.value);
-  } catch (err) {
-    showToast(err.message || 'Failed to load contacts', 'error');
-  } finally {
-    state.loadingChats = false;
+    state.searching = false;
+    renderChats();
   }
 }
 
@@ -551,27 +531,27 @@ async function deletePoll(id) {
 }
 
 els.chatList.addEventListener('click', (e) => {
-  const loadMore = e.target.closest('.load-more-chats');
-  if (loadMore) {
-    state.visibleCount += PAGE_SIZE;
-    renderChats(els.chatSearch.value);
-    return;
-  }
-
   const item = e.target.closest('.chat-item');
   if (!item) return;
+
+  const id = item.dataset.id;
+  const name = item.querySelector('.chat-name')?.textContent || 'Unknown';
+  const isGroup = item.querySelector('.chat-meta')?.textContent === 'Group';
 
   if (e.target.tagName !== 'INPUT') {
     const checkbox = item.querySelector('input');
     checkbox.checked = !checkbox.checked;
-    toggleChat(item.dataset.id, checkbox.checked);
+    toggleChat(id, checkbox.checked, { id, name, isGroup });
   }
 });
 
 els.chatList.addEventListener('change', (e) => {
   const item = e.target.closest('.chat-item');
   if (!item || e.target.tagName !== 'INPUT') return;
-  toggleChat(item.dataset.id, e.target.checked);
+  const id = item.dataset.id;
+  const name = item.querySelector('.chat-name')?.textContent || 'Unknown';
+  const isGroup = item.querySelector('.chat-meta')?.textContent === 'Group';
+  toggleChat(id, e.target.checked, { id, name, isGroup });
 });
 
 els.connectBtn.addEventListener('click', connect);
@@ -585,29 +565,22 @@ els.addOptionBtn.addEventListener('click', () => {
 els.chatSearch.addEventListener('input', (e) => {
   clearTimeout(searchTimer);
   searchTimer = setTimeout(() => {
-    state.visibleCount = PAGE_SIZE;
-    renderChats(e.target.value);
-  }, 250);
+    searchChats(e.target.value);
+  }, 400);
 });
 
 document.querySelectorAll('.chat-filter').forEach((btn) => {
-  btn.addEventListener('click', async () => {
+  btn.addEventListener('click', () => {
     document.querySelectorAll('.chat-filter').forEach((b) => b.classList.remove('active'));
     btn.classList.add('active');
     state.chatFilter = btn.dataset.filter;
-    state.visibleCount = PAGE_SIZE;
-
-    if (needsContacts() && state.chatsLoaded && !state.contactsLoaded) {
-      await ensureContactsLoaded();
-    } else if (!state.chatsLoaded && state.connectionState === 'ready') {
-      await loadChats(false);
+    if (els.chatSearch.value.trim().length >= 2) {
+      searchChats(els.chatSearch.value);
     } else {
-      renderChats(els.chatSearch.value);
+      renderChats();
     }
   });
 });
-
-els.refreshChatsBtn.addEventListener('click', () => loadChats(true));
 els.scheduleBtn.addEventListener('click', () => submitPoll(false));
 els.sendNowBtn.addEventListener('click', () => submitPoll(true));
 els.refreshPollsBtn.addEventListener('click', loadPolls);
@@ -653,17 +626,11 @@ if (isCapacitorApp() && !getApiBase()) {
 setInterval(() => {
   if (document.hidden) return;
   fetchStatus();
-  if (state.connectionState === 'ready' && !state.chats.length && !state.loadingChats) {
-    loadChats(true);
-  }
 }, 30000);
 
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) {
     fetchStatus();
     loadPolls();
-    if (state.connectionState === 'ready' && !state.chats.length) {
-      loadChats(true);
-    }
   }
 });

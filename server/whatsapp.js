@@ -303,18 +303,6 @@ function createClient() {
     }
 
     emit('ready', connectedInfo);
-
-    chatsLoading = true;
-    fetchAndCacheChats({ refresh: true, includeContacts: true })
-      .then((chats) => {
-        console.log(`Preloaded ${chats.length} chats`);
-      })
-      .catch((err) => {
-        console.error('Initial chat preload failed:', err.message);
-      })
-      .finally(() => {
-        chatsLoading = false;
-      });
   });
 
   instance.on('disconnected', (reason) => {
@@ -411,6 +399,43 @@ async function disconnect() {
   connectingSince = 0;
   lastQr = null;
   lastQrDataUrl = null;
+}
+
+async function searchChats({ query = '', filter = 'all', includeContacts = true } = {}) {
+  if (!client || connectionState !== 'ready') {
+    throw new Error('WhatsApp is not connected');
+  }
+
+  const term = query.trim().toLowerCase();
+  if (term.length < 2) {
+    return [];
+  }
+
+  if (cachedChats.length === 0) {
+    await fetchAndCacheChats({ refresh: false, includeContacts: false });
+  }
+
+  if (includeContacts && !cachedContacts) {
+    try {
+      cachedContacts = (await fetchChatsDirect({ includeContacts: true })).filter((c) => !c.isGroup);
+    } catch (err) {
+      console.error('Contact search load failed:', err.message);
+    }
+  }
+
+  let pool = includeContacts && cachedContacts
+    ? mergeChatLists(cachedChats, cachedContacts)
+    : cachedChats;
+
+  if (filter === 'groups') {
+    pool = pool.filter((c) => c.isGroup);
+  } else if (filter === 'contacts') {
+    pool = pool.filter((c) => !c.isGroup);
+  }
+
+  return pool
+    .filter((c) => c.name.toLowerCase().includes(term))
+    .slice(0, 50);
 }
 
 async function getChats({ refresh = false, includeContacts = false } = {}) {
@@ -522,6 +547,7 @@ module.exports = {
   disconnect,
   getStatus,
   getChats,
+  searchChats,
   sendPollToChats,
   isReady,
   on,
