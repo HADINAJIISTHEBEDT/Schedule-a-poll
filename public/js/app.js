@@ -1,18 +1,17 @@
-const $ = (sel) => document.querySelector(sel);
-
-const PAGE_SIZE = 40;
+const $ = (s) => document.querySelector(s);
+const PAGE = 50;
 
 const state = {
   chats: [],
-  selectedChats: new Set(),
+  selected: new Set(),
   options: ['', ''],
-  chatFilter: 'all',
-  visibleCount: PAGE_SIZE,
-  contactsLoaded: false,
-  chatsLoaded: false,
-  connectionState: 'disconnected',
-  loadingChats: false,
+  filter: 'all',
+  visible: PAGE,
+  conn: 'disconnected',
+  loading: false,
 };
+
+let pollTimer = null;
 
 const els = {
   statusDot: $('#statusDot'),
@@ -38,531 +37,337 @@ const els = {
   pollsList: $('#pollsList'),
   refreshPollsBtn: $('#refreshPollsBtn'),
   toast: $('#toast'),
-  serverSettingsBtn: $('#serverSettingsBtn'),
-  serverOverlay: $('#serverOverlay'),
-  serverUrlInput: $('#serverUrlInput'),
-  saveServerBtn: $('#saveServerBtn'),
-  closeServerBtn: $('#closeServerBtn'),
 };
 
-let searchTimer = null;
-let chatCounts = { groups: 0, contacts: 0 };
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
 
-function showToast(message, type = 'success') {
-  els.toast.textContent = message;
+function safeId(id) {
+  return 'id-' + String(id).replace(/[^a-zA-Z0-9]/g, '_');
+}
+
+function toast(msg, type = 'success') {
+  els.toast.textContent = msg;
   els.toast.className = `toast ${type}`;
+  els.toast.classList.remove('hidden');
   setTimeout(() => els.toast.classList.add('hidden'), 3500);
 }
 
-function renderOptions() {
-  els.optionsList.innerHTML = state.options
-    .map(
-      (opt, i) => `
-    <div class="option-row">
-      <input type="text" value="${escapeHtml(opt)}" data-index="${i}" placeholder="Option ${i + 1}" maxlength="100" />
-      ${state.options.length > 2 ? `<button type="button" class="remove-option" data-index="${i}">×</button>` : ''}
-    </div>`
-    )
-    .join('');
-
-  els.optionsList.querySelectorAll('input').forEach((input) => {
-    input.addEventListener('input', (e) => {
-      state.options[Number(e.target.dataset.index)] = e.target.value;
-    });
-  });
-
-  els.optionsList.querySelectorAll('.remove-option').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const idx = Number(btn.dataset.index);
-      state.options.splice(idx, 1);
-      renderOptions();
-    });
+function filteredChats(term = '') {
+  const q = term.toLowerCase();
+  return state.chats.filter((c) => {
+    if (q && !c.name.toLowerCase().includes(q)) return false;
+    if (state.filter === 'groups') return c.isGroup;
+    if (state.filter === 'chats') return !c.isGroup;
+    return true;
   });
 }
 
-function escapeHtml(str) {
-  const div = document.createElement('div');
-  div.textContent = str;
-  return div.innerHTML;
-}
+function renderChats(term = '') {
+  const list = filteredChats(term);
+  const groups = list.filter((c) => c.isGroup);
+  const dms = list.filter((c) => !c.isGroup);
 
-function getFilteredChats(term = '') {
-  const search = term.toLowerCase();
-  let filtered = state.chats;
-
-  if (search) {
-    filtered = filtered.filter((c) => c.name.toLowerCase().includes(search));
+  if (state.chats.length) {
+    els.chatSummary.textContent = `${groups.length} groups · ${dms.length} chats`;
+  } else {
+    els.chatSummary.textContent = state.loading ? 'Loading...' : 'Connect WhatsApp to load chats';
   }
 
-  if (state.chatFilter === 'groups') {
-    filtered = filtered.filter((c) => c.isGroup);
-  } else if (state.chatFilter === 'contacts') {
-    filtered = filtered.filter((c) => !c.isGroup);
-  }
-
-  return filtered;
-}
-
-function renderChats(filter = '') {
-  const filtered = getFilteredChats(filter);
-  const groups = filtered.filter((c) => c.isGroup);
-  const contacts = filtered.filter((c) => !c.isGroup);
-  updateChatSummary();
-
-  if (filtered.length === 0) {
-    els.chatList.innerHTML = `<p class="placeholder">${state.chats.length ? 'No chats match your search' : 'Connect WhatsApp, then tap Load chats'}</p>`;
+  if (!list.length) {
+    const msg = state.chats.length
+      ? 'No matches'
+      : state.conn === 'ready'
+        ? 'Tap Refresh to load chats'
+        : state.conn === 'qr'
+          ? 'Scan the QR code first'
+          : 'Click Connect WhatsApp';
+    els.chatList.innerHTML = `<p class="placeholder">${msg}</p>`;
     return;
   }
 
-  const renderItem = (chat) => `
-    <label class="chat-item ${state.selectedChats.has(chat.id) ? 'selected' : ''}" data-id="${chat.id}">
-      <input type="checkbox" ${state.selectedChats.has(chat.id) ? 'checked' : ''} />
-      <div>
-        <div class="chat-name">${escapeHtml(chat.name)}</div>
-        <div class="chat-meta">${chat.isGroup ? 'Group' : 'Contact'}</div>
-      </div>
-    </label>`;
+  const ordered = state.filter === 'all' ? [...groups, ...dms] : list;
+  const shown = ordered.slice(0, state.visible);
 
-  let list = [];
-  if (state.chatFilter === 'all') {
-    list = [...groups, ...contacts];
-  } else {
-    list = filtered;
-  }
+  const item = (c) => {
+    const id = safeId(c.id);
+    const sel = state.selected.has(c.id);
+    return `<div class="chat-item${sel ? ' selected' : ''}" data-id="${esc(c.id)}">
+      <input type="checkbox" id="${id}" ${sel ? 'checked' : ''} />
+      <label for="${id}"><span class="chat-name">${esc(c.name)}</span>
+      <span class="chat-meta">${c.isGroup ? 'Group' : 'Chat'}</span></label>
+    </div>`;
+  };
 
-  const visible = list.slice(0, state.visibleCount);
   let html = '';
-
-  if (state.chatFilter === 'all' && !filter) {
-    const visibleGroups = visible.filter((c) => c.isGroup);
-    const visibleContacts = visible.filter((c) => !c.isGroup);
-    if (visibleGroups.length) {
-      html += `<div class="chat-section-title">Groups (${groups.length})</div>`;
-      html += visibleGroups.map(renderItem).join('');
-    }
-    if (visibleContacts.length) {
-      html += `<div class="chat-section-title">Contacts (${contacts.length})</div>`;
-      html += visibleContacts.map(renderItem).join('');
-    }
+  if (state.filter === 'all' && !term) {
+    const sg = shown.filter((c) => c.isGroup);
+    const sd = shown.filter((c) => !c.isGroup);
+    if (sg.length) html += `<div class="section-label">Groups (${groups.length})</div>` + sg.map(item).join('');
+    if (sd.length) html += `<div class="section-label">Chats (${dms.length})</div>` + sd.map(item).join('');
+    if (!html) html = shown.map(item).join('');
   } else {
-    html = visible.map(renderItem).join('');
+    html = shown.map(item).join('');
   }
 
-  if (list.length > state.visibleCount) {
-    const remaining = list.length - state.visibleCount;
-    html += `<button type="button" class="btn btn-ghost btn-sm load-more-chats">Show ${Math.min(remaining, PAGE_SIZE)} more (${remaining} left)</button>`;
+  if (ordered.length > state.visible) {
+    const left = ordered.length - state.visible;
+    html += `<button type="button" class="btn btn-ghost btn-sm load-more">Show ${Math.min(left, PAGE)} more (${left} left)</button>`;
   }
 
   els.chatList.innerHTML = html;
-  updateSelectedCount();
+  els.selectedCount.textContent = `${state.selected.size} chat${state.selected.size !== 1 ? 's' : ''} selected`;
 }
 
-function updateChatSummary() {
-  if (!state.chats.length) {
-    els.chatSummary.textContent = state.loadingChats ? 'Loading...' : 'Tap Refresh to load chats';
-    return;
-  }
-  els.chatSummary.textContent = `${chatCounts.groups} groups · ${chatCounts.contacts} contacts`;
+function scrollToChats() {
+  document.getElementById('chatSelectSection')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
-function toggleChat(id, selected) {
-  if (selected) state.selectedChats.add(id);
-  else state.selectedChats.delete(id);
-  updateSelectedCount();
-  els.chatList.querySelectorAll(`.chat-item[data-id="${CSS.escape(id)}"]`).forEach((item) => {
-    item.classList.toggle('selected', selected);
-    const input = item.querySelector('input');
-    if (input) input.checked = selected;
-  });
-}
-
-function updateSelectedCount() {
-  const n = state.selectedChats.size;
-  els.selectedCount.textContent = `${n} chat${n !== 1 ? 's' : ''} selected`;
-}
-
-function setDefaultSchedule() {
-  const now = new Date();
-  now.setMinutes(now.getMinutes() + 30);
-  now.setSeconds(0);
-  els.scheduledAt.value = toLocalDatetime(now);
-}
-
-function toLocalDatetime(date) {
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
-
-function updateConnectionUI({ state: connState, qr, connectedInfo }) {
-  const wasReady = state.connectionState === 'ready';
-  state.connectionState = connState;
-  els.statusDot.className = `status-dot ${connState}`;
+function setConn(data) {
+  const wasReady = state.conn === 'ready';
+  state.conn = data.state;
 
   const labels = {
     disconnected: 'Disconnected',
     connecting: 'Connecting...',
     qr: 'Scan QR Code',
     authenticated: 'Authenticating...',
-    ready: connectedInfo ? `Connected as ${connectedInfo.pushname}` : 'Connected',
+    ready: data.connectedInfo ? `Connected as ${data.connectedInfo.pushname}` : 'Connected',
     auth_failure: 'Auth failed',
   };
+  els.statusDot.className = `status-dot ${data.state}`;
+  els.statusText.textContent = labels[data.state] || data.state;
 
-  els.statusText.textContent = labels[connState] || connState;
-
-  if (connState === 'qr' && qr) {
-    els.qrImage.src = qr;
+  if (data.state === 'qr' && data.qr) {
+    els.qrImage.src = data.qr;
     els.qrOverlay.classList.remove('hidden');
-  }
-
-  if (connState === 'ready') {
+    els.connectBtn.textContent = 'Show QR Code';
+  } else if (data.state === 'ready') {
     els.qrOverlay.classList.add('hidden');
     els.connectBtn.textContent = 'Disconnect';
-    if (!wasReady && !state.chatsLoaded && !state.loadingChats) {
-      loadChats(false);
-    }
+    if (!wasReady) loadChats(true);
+    else renderChats(els.chatSearch.value);
   } else {
-    els.connectBtn.textContent = connState === 'disconnected' ? 'Connect WhatsApp' : 'Connecting...';
-    if (connState === 'disconnected') {
-      state.chatsLoaded = false;
-      state.contactsLoaded = false;
+    els.connectBtn.textContent = data.state === 'disconnected' ? 'Connect WhatsApp' : 'Connecting...';
+    if (data.state === 'disconnected') {
       state.chats = [];
-      chatCounts = { groups: 0, contacts: 0 };
+      state.selected.clear();
+      els.qrOverlay.classList.add('hidden');
+      renderChats();
     }
   }
 }
 
-async function fetchStatus() {
+async function getStatus() {
   try {
-    const res = await apiFetch('/api/status');
-    const data = await res.json();
-    updateConnectionUI(data);
+    const data = await (await apiFetch('/api/status')).json();
+    setConn(data);
+    if (['connecting', 'qr', 'authenticated'].includes(data.state)) startPoll();
   } catch {
-    updateConnectionUI({ state: 'disconnected' });
+    setConn({ state: 'disconnected' });
   }
 }
 
-async function connect() {
-  const status = await apiFetch('/api/status').then((r) => r.json());
+function startPoll() {
+  if (pollTimer) clearInterval(pollTimer);
+  const tick = async () => {
+    try {
+      const data = await (await apiFetch('/api/status')).json();
+      setConn(data);
+      if (['ready', 'disconnected', 'auth_failure'].includes(data.state)) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+      }
+    } catch {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+  };
+  tick();
+  pollTimer = setInterval(tick, 1000);
+}
 
-  if (status.state === 'ready') {
+async function toggleConnect() {
+  const data = await (await apiFetch('/api/status')).json();
+
+  if (data.state === 'ready') {
     await apiFetch('/api/disconnect', { method: 'POST' });
     state.chats = [];
-    state.selectedChats.clear();
-    state.chatsLoaded = false;
-    state.contactsLoaded = false;
-    chatCounts = { groups: 0, contacts: 0 };
-    renderChats();
-    showToast('Disconnected');
-    return fetchStatus();
+    state.selected.clear();
+    toast('Disconnected');
+    return getStatus();
   }
 
-  await apiFetch('/api/connect', { method: 'POST' });
-  showToast('Connecting — scan the QR code');
-  pollStatus();
-}
-
-function pollStatus() {
-  const interval = setInterval(async () => {
-    const res = await apiFetch('/api/status');
-    const data = await res.json();
-    updateConnectionUI(data);
-    if (data.state === 'ready' || data.state === 'disconnected' || data.state === 'auth_failure') {
-      clearInterval(interval);
-    }
-  }, 3000);
-}
-
-function needsContacts() {
-  return state.chatFilter === 'contacts' || state.chatFilter === 'all';
-}
-
-async function loadChats(refresh = false) {
-  if (state.loadingChats) return;
-
-  state.loadingChats = true;
-  state.visibleCount = PAGE_SIZE;
-  els.chatList.innerHTML = '<p class="placeholder">Loading chats...</p>';
-  updateChatSummary();
-
-  try {
-    const params = new URLSearchParams();
-    if (refresh) params.set('refresh', '1');
-    if (refresh && needsContacts()) params.set('contacts', '1');
-
-    const res = await apiFetch(`/api/chats?${params}`);
-    if (!res.ok) throw new Error((await res.json()).error || 'Failed to load chats');
-
-    state.chats = await res.json();
-    state.chatsLoaded = true;
-    state.contactsLoaded = refresh && needsContacts();
-    chatCounts = {
-      groups: state.chats.filter((c) => c.isGroup).length,
-      contacts: state.chats.filter((c) => !c.isGroup).length,
-    };
-    renderChats(els.chatSearch.value);
-  } catch (err) {
-    els.chatList.innerHTML = '<p class="placeholder">Could not load chats. Tap Refresh to try again.</p>';
-    showToast(err.message || 'Failed to load chats', 'error');
-  } finally {
-    state.loadingChats = false;
-  }
-}
-
-async function ensureContactsLoaded() {
-  if (state.contactsLoaded || state.loadingChats) return;
-  state.loadingChats = true;
-  try {
-    const res = await apiFetch('/api/chats?contacts=1');
-    if (!res.ok) throw new Error((await res.json()).error || 'Failed to load contacts');
-    state.chats = await res.json();
-    state.contactsLoaded = true;
-    chatCounts = {
-      groups: state.chats.filter((c) => c.isGroup).length,
-      contacts: state.chats.filter((c) => !c.isGroup).length,
-    };
-    renderChats(els.chatSearch.value);
-  } catch (err) {
-    showToast(err.message || 'Failed to load contacts', 'error');
-  } finally {
-    state.loadingChats = false;
-  }
-}
-
-async function loadPolls() {
-  try {
-    const res = await apiFetch('/api/polls');
-    const polls = await res.json();
-    renderPolls(polls);
-  } catch {
-    els.pollsList.innerHTML = '<p class="placeholder">Failed to load polls</p>';
-  }
-}
-
-function renderPolls(polls) {
-  if (!polls.length) {
-    els.pollsList.innerHTML = '<p class="placeholder">No polls yet</p>';
+  if (data.state === 'qr') {
+    setConn(data);
+    startPoll();
     return;
   }
 
-  els.pollsList.innerHTML = polls
+  const res = await apiFetch('/api/connect', { method: 'POST' });
+  const body = await res.json();
+  if (!res.ok) return toast(body.error || 'Connect failed', 'error');
+  setConn(body);
+  toast(body.qr ? 'Scan the QR code' : 'Waiting for QR...');
+  startPoll();
+}
+
+async function loadChats(refresh = false) {
+  if (state.loading) return;
+  state.loading = true;
+  state.visible = PAGE;
+  els.chatList.innerHTML = '<p class="placeholder">Loading chats...</p>';
+
+  try {
+    const url = refresh ? '/api/chats?refresh=1' : '/api/chats';
+    const res = await apiFetch(url);
+    if (!res.ok) throw new Error((await res.json()).error || 'Failed');
+    state.chats = await res.json();
+    renderChats(els.chatSearch.value);
+    scrollToChats();
+    if (!state.chats.length && state.conn === 'ready' && !refresh) {
+      await new Promise((r) => setTimeout(r, 2000));
+      return loadChats(true);
+    }
+  } catch (e) {
+    els.chatList.innerHTML = '<p class="placeholder">Failed — tap Refresh</p>';
+    toast(e.message, 'error');
+  } finally {
+    state.loading = false;
+  }
+}
+
+function renderOptions() {
+  els.optionsList.innerHTML = state.options
     .map(
-      (p) => `
-    <div class="poll-card">
-      <div class="poll-question">${escapeHtml(p.question)}</div>
-      <div class="poll-meta">
-        ${p.chatIds.length} chat(s) · Scheduled: ${formatDate(p.scheduledAt)}
-        ${p.sentAt ? ` · Sent: ${formatDate(p.sentAt)}` : ''}
-      </div>
-      <div class="poll-options-preview">
-        ${p.options.map((o) => `<span class="option-tag">${escapeHtml(o)}</span>`).join('')}
-      </div>
-      ${p.error ? `<div class="poll-meta" style="color:var(--danger)">${escapeHtml(p.error)}</div>` : ''}
-      <div class="poll-footer">
-        <span class="status-badge ${p.status}">${p.status}</span>
-        <div class="poll-actions">
-          ${p.status === 'pending' ? `<button class="btn btn-ghost btn-sm send-now" data-id="${p.id}">Send now</button>` : ''}
-          ${p.status === 'pending' ? `<button class="btn btn-danger delete-poll" data-id="${p.id}">Delete</button>` : ''}
-        </div>
-      </div>
+      (o, i) => `<div class="option-row">
+      <input type="text" value="${esc(o)}" data-i="${i}" placeholder="Option ${i + 1}" maxlength="100" />
+      ${state.options.length > 2 ? `<button type="button" class="remove-opt" data-i="${i}">×</button>` : ''}
     </div>`
     )
     .join('');
 
-  els.pollsList.querySelectorAll('.send-now').forEach((btn) => {
-    btn.addEventListener('click', () => sendPollNow(btn.dataset.id));
+  els.optionsList.querySelectorAll('input').forEach((inp) => {
+    inp.oninput = () => { state.options[+inp.dataset.i] = inp.value; };
   });
-
-  els.pollsList.querySelectorAll('.delete-poll').forEach((btn) => {
-    btn.addEventListener('click', () => deletePoll(btn.dataset.id));
+  els.optionsList.querySelectorAll('.remove-opt').forEach((btn) => {
+    btn.onclick = () => { state.options.splice(+btn.dataset.i, 1); renderOptions(); };
   });
 }
 
-function formatDate(str) {
-  if (!str) return '';
-  const d = new Date(str);
-  if (Number.isNaN(d.getTime())) return str;
-  return d.toLocaleString();
+async function loadPolls() {
+  try {
+    const polls = await (await apiFetch('/api/polls')).json();
+    if (!polls.length) {
+      els.pollsList.innerHTML = '<p class="placeholder">No polls yet</p>';
+      return;
+    }
+    els.pollsList.innerHTML = polls
+      .map(
+        (p) => `<div class="poll-card">
+        <div class="poll-q">${esc(p.question)}</div>
+        <div class="poll-meta">${p.chatIds.length} chats · ${new Date(p.scheduledAt).toLocaleString()}</div>
+        <span class="badge ${p.status}">${p.status}</span>
+        ${p.status === 'pending' ? `<button class="btn btn-sm send-now" data-id="${p.id}">Send now</button>` : ''}
+      </div>`
+      )
+      .join('');
+    els.pollsList.querySelectorAll('.send-now').forEach((b) => {
+      b.onclick = async () => {
+        const r = await apiFetch(`/api/polls/${b.dataset.id}/send-now`, { method: 'POST' });
+        if (r.ok) { toast('Sent!'); loadPolls(); } else toast((await r.json()).error, 'error');
+      };
+    });
+  } catch {
+    els.pollsList.innerHTML = '<p class="placeholder">Failed to load</p>';
+  }
 }
 
-async function submitPoll(sendNow = false) {
+async function submitPoll(now = false) {
   const question = els.question.value.trim();
   const options = state.options.map((o) => o.trim()).filter(Boolean);
-  const chatIds = [...state.selectedChats];
-  const delayMin = Number(els.delayMin.value);
-  const delayMax = Number(els.delayMax.value);
+  const chatIds = [...state.selected];
+  if (!question) return toast('Enter a question', 'error');
+  if (options.length < 2) return toast('Need 2+ options', 'error');
+  if (!chatIds.length) return toast('Select at least one chat', 'error');
 
-  if (!question) return showToast('Enter a poll question', 'error');
-  if (options.length < 2) return showToast('Add at least 2 options', 'error');
-  if (!chatIds.length) return showToast('Select at least one chat', 'error');
-  if (delayMin > delayMax) return showToast('Min delay must be ≤ max delay', 'error');
-
-  const scheduledAt = sendNow ? null : new Date(els.scheduledAt.value).toISOString();
-
-  if (!sendNow && (!scheduledAt || Number.isNaN(new Date(scheduledAt).getTime()))) {
-    return showToast('Pick a valid schedule time', 'error');
+  const scheduledAt = now ? null : new Date(els.scheduledAt.value).toISOString();
+  if (!now && (!scheduledAt || Number.isNaN(Date.parse(scheduledAt)))) {
+    return toast('Pick a valid time', 'error');
   }
 
-  if (!sendNow && new Date(scheduledAt) <= new Date()) {
-    return showToast('Schedule time must be in the future', 'error');
-  }
-
-  const body = {
-    question,
-    options,
-    chatIds,
-    allowMultiple: els.allowMultiple.checked,
-    scheduledAt,
-    humanDelayMin: delayMin,
-    humanDelayMax: delayMax,
-    sendNow,
-  };
-
-  try {
-    const res = await apiFetch('/api/polls', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error);
-
-    showToast(sendNow ? 'Poll is being sent naturally...' : 'Poll scheduled!');
-    els.question.value = '';
-    state.options = ['', ''];
-    renderOptions();
-    loadPolls();
-  } catch (err) {
-    showToast(err.message, 'error');
-  }
+  const res = await apiFetch('/api/polls', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      question,
+      options,
+      chatIds,
+      allowMultiple: els.allowMultiple.checked,
+      scheduledAt,
+      humanDelayMin: +els.delayMin.value,
+      humanDelayMax: +els.delayMax.value,
+      sendNow: now,
+    }),
+  });
+  const body = await res.json();
+  if (!res.ok) return toast(body.error, 'error');
+  toast(now ? 'Sending...' : 'Scheduled!');
+  els.question.value = '';
+  state.options = ['', ''];
+  renderOptions();
+  loadPolls();
 }
 
-async function sendPollNow(id) {
-  try {
-    const res = await apiFetch(`/api/polls/${id}/send-now`, { method: 'POST' });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error);
-    showToast('Poll sent!');
-    loadPolls();
-  } catch (err) {
-    showToast(err.message, 'error');
-  }
-}
+// Events
+els.connectBtn.onclick = toggleConnect;
+els.closeQrBtn.onclick = () => els.qrOverlay.classList.add('hidden');
+els.addOptionBtn.onclick = () => {
+  if (state.options.length >= 12) return toast('Max 12 options', 'error');
+  state.options.push('');
+  renderOptions();
+};
+els.chatSearch.oninput = () => { state.visible = PAGE; renderChats(els.chatSearch.value); };
+els.refreshChatsBtn.onclick = () => loadChats(true);
+els.scheduleBtn.onclick = () => submitPoll(false);
+els.sendNowBtn.onclick = () => submitPoll(true);
+els.refreshPollsBtn.onclick = loadPolls;
 
-async function deletePoll(id) {
-  try {
-    const res = await apiFetch(`/api/polls/${id}`, { method: 'DELETE' });
-    if (!res.ok) throw new Error((await res.json()).error);
-    showToast('Poll deleted');
-    loadPolls();
-  } catch (err) {
-    showToast(err.message, 'error');
-  }
-}
-
-els.chatList.addEventListener('click', (e) => {
-  const loadMore = e.target.closest('.load-more-chats');
-  if (loadMore) {
-    state.visibleCount += PAGE_SIZE;
+els.chatList.onclick = (e) => {
+  if (e.target.closest('.load-more')) {
+    state.visible += PAGE;
     renderChats(els.chatSearch.value);
     return;
   }
-
-  const item = e.target.closest('.chat-item');
-  if (!item) return;
-
-  if (e.target.tagName !== 'INPUT') {
-    const checkbox = item.querySelector('input');
-    checkbox.checked = !checkbox.checked;
-    toggleChat(item.dataset.id, checkbox.checked);
-  }
-});
-
-els.chatList.addEventListener('change', (e) => {
-  const item = e.target.closest('.chat-item');
-  if (!item || e.target.tagName !== 'INPUT') return;
-  toggleChat(item.dataset.id, e.target.checked);
-});
-
-els.connectBtn.addEventListener('click', connect);
-els.closeQrBtn.addEventListener('click', () => els.qrOverlay.classList.add('hidden'));
-els.addOptionBtn.addEventListener('click', () => {
-  if (state.options.length >= 12) return showToast('Maximum 12 options', 'error');
-  state.options.push('');
-  renderOptions();
-});
-
-els.chatSearch.addEventListener('input', (e) => {
-  clearTimeout(searchTimer);
-  searchTimer = setTimeout(() => {
-    state.visibleCount = PAGE_SIZE;
-    renderChats(e.target.value);
-  }, 250);
-});
+  const row = e.target.closest('.chat-item');
+  if (!row) return;
+  const cb = row.querySelector('input');
+  if (e.target !== cb) cb.checked = !cb.checked;
+  if (cb.checked) state.selected.add(row.dataset.id);
+  else state.selected.delete(row.dataset.id);
+  row.classList.toggle('selected', cb.checked);
+  els.selectedCount.textContent = `${state.selected.size} chats selected`;
+};
 
 document.querySelectorAll('.chat-filter').forEach((btn) => {
-  btn.addEventListener('click', async () => {
+  btn.onclick = () => {
     document.querySelectorAll('.chat-filter').forEach((b) => b.classList.remove('active'));
     btn.classList.add('active');
-    state.chatFilter = btn.dataset.filter;
-    state.visibleCount = PAGE_SIZE;
-
-    if (needsContacts() && state.chatsLoaded && !state.contactsLoaded) {
-      await ensureContactsLoaded();
-    } else if (!state.chatsLoaded && state.connectionState === 'ready') {
-      await loadChats(false);
-    } else {
-      renderChats(els.chatSearch.value);
-    }
-  });
+    state.filter = btn.dataset.filter;
+    state.visible = PAGE;
+    if (state.conn === 'ready' && !state.chats.length) loadChats(true);
+    else renderChats(els.chatSearch.value);
+  };
 });
 
-els.refreshChatsBtn.addEventListener('click', () => loadChats(true));
-els.scheduleBtn.addEventListener('click', () => submitPoll(false));
-els.sendNowBtn.addEventListener('click', () => submitPoll(true));
-els.refreshPollsBtn.addEventListener('click', loadPolls);
-
-function openServerSettings() {
-  els.serverUrlInput.value = getApiBase() || 'http://';
-  els.serverOverlay.classList.remove('hidden');
-}
-
-function closeServerSettings() {
-  els.serverOverlay.classList.add('hidden');
-}
-
-function saveServerSettings() {
-  const url = els.serverUrlInput.value.trim();
-  if (!url || !/^https?:\/\//i.test(url)) {
-    return showToast('Enter a valid URL like http://192.168.1.5:3000', 'error');
-  }
-  setApiBase(url);
-  closeServerSettings();
-  showToast('Server saved');
-  fetchStatus();
-  loadPolls();
-}
-
-els.serverSettingsBtn.addEventListener('click', openServerSettings);
-els.saveServerBtn.addEventListener('click', saveServerSettings);
-els.closeServerBtn.addEventListener('click', closeServerSettings);
-
+// Init
+const sched = new Date();
+sched.setMinutes(sched.getMinutes() + 30);
+sched.setSeconds(0);
+els.scheduledAt.value = sched.toISOString().slice(0, 16);
 renderOptions();
-setDefaultSchedule();
-if (isCapacitorApp() && !getApiBase()) {
-  openServerSettings();
-} else {
-  fetchStatus();
-  loadPolls();
-}
-
-setInterval(() => {
-  if (document.hidden) return;
-  fetchStatus();
-}, 30000);
-
-document.addEventListener('visibilitychange', () => {
-  if (!document.hidden) {
-    fetchStatus();
-    loadPolls();
-  }
-});
+getStatus();
+loadPolls();
