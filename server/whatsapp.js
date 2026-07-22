@@ -3,6 +3,7 @@ const qrcode = require('qrcode');
 const fs = require('fs');
 const path = require('path');
 const { humanLikeDelay, staggeredChatDelay, sleep, randomBetween } = require('./humanSend');
+const { PINNED_WEB_VERSION } = require('./wwebVersion');
 
 const CHROME_CANDIDATES = [
   process.env.PUPPETEER_EXECUTABLE_PATH,
@@ -14,7 +15,6 @@ const CHROME_CANDIDATES = [
 
 const SESSION_PATH = path.join(__dirname, '..', 'data', 'whatsapp-session');
 const WEB_CACHE_PATH = path.join(__dirname, '..', 'data', 'wwebjs_cache');
-const PINNED_WEB_VERSION = '2.3000.1017054665';
 
 const PUPPETEER_ARGS = [
   '--no-sandbox',
@@ -213,7 +213,10 @@ const eventListeners = {
   ready: [],
   disconnected: [],
   auth_failure: [],
+  status: [],
 };
+
+const statusSubscribers = new Set();
 
 function on(event, handler) {
   if (eventListeners[event]) {
@@ -225,6 +228,23 @@ function emit(event, data) {
   if (eventListeners[event]) {
     eventListeners[event].forEach((handler) => handler(data));
   }
+}
+
+function broadcastStatus() {
+  const status = getStatus();
+  emit('status', status);
+  statusSubscribers.forEach((send) => {
+    try {
+      send(status);
+    } catch {
+      statusSubscribers.delete(send);
+    }
+  });
+}
+
+function subscribeStatus(send) {
+  statusSubscribers.add(send);
+  return () => statusSubscribers.delete(send);
 }
 
 function getStatus() {
@@ -285,11 +305,13 @@ function createClient() {
       connectingSince = 0;
       lastQr = qr;
       lastQrDataUrl = await qrcode.toDataURL(qr, {
-        errorCorrectionLevel: 'M',
+        errorCorrectionLevel: 'L',
         margin: 1,
-        scale: 5,
+        scale: 4,
+        width: 256,
       });
       emit('qr', lastQrDataUrl);
+      broadcastStatus();
     } catch (err) {
       console.error('QR handler error:', err.message);
     }
@@ -299,6 +321,7 @@ function createClient() {
     connectionState = 'authenticated';
     lastQr = null;
     lastQrDataUrl = null;
+    broadcastStatus();
   });
 
   instance.on('ready', async () => {
@@ -319,6 +342,7 @@ function createClient() {
     }
 
     emit('ready', connectedInfo);
+    broadcastStatus();
   });
 
   instance.on('disconnected', (reason) => {
@@ -327,12 +351,14 @@ function createClient() {
     client = null;
     connectingSince = 0;
     emit('disconnected', reason);
+    broadcastStatus();
   });
 
   instance.on('auth_failure', (msg) => {
     connectionState = 'auth_failure';
     connectingSince = 0;
     emit('auth_failure', msg);
+    broadcastStatus();
   });
 
   return instance;
@@ -359,6 +385,7 @@ async function initialize({ force = false, resetSession = false } = {}) {
 
   connectionState = 'connecting';
   connectingSince = Date.now();
+  broadcastStatus();
 
   if (client) {
     await disconnect({ preserveState: true });
@@ -393,6 +420,7 @@ async function initialize({ force = false, resetSession = false } = {}) {
   connectionState = 'disconnected';
   connectingSince = 0;
   client = null;
+  broadcastStatus();
 
   const message = isDetachedFrameError(lastError)
     ? 'Browser connection failed. Tap Connect again — it will retry automatically.'
@@ -587,6 +615,7 @@ function startConnection({ force = false, resetSession = false } = {}) {
   initInProgress = true;
   connectionState = 'connecting';
   connectingSince = Date.now();
+  broadcastStatus();
 
   initialize({ force: shouldForce, resetSession })
     .catch((err) => {
@@ -621,6 +650,7 @@ module.exports = {
   warmupConnection,
   disconnect,
   getStatus,
+  subscribeStatus,
   getChats,
   searchChats,
   sendPollToChats,

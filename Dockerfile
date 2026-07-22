@@ -42,7 +42,8 @@ RUN npm ci --omit=dev --ignore-scripts \
     && node -e "require('better-sqlite3')"
 
 COPY . .
-RUN node scripts/patch-whatsapp.js
+RUN node scripts/patch-whatsapp.js \
+    && node scripts/precache-wweb.js
 
 RUN mkdir -p /app/data
 

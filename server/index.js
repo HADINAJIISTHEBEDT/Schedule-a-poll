@@ -41,6 +41,26 @@ app.get('/api/status', (_req, res) => {
   res.json(whatsapp.getStatus());
 });
 
+app.get('/api/events', (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders();
+
+  const send = (status) => {
+    res.write(`data: ${JSON.stringify(status)}\n\n`);
+  };
+
+  whatsapp.warmupConnection();
+  send(whatsapp.getStatus());
+  const unsubscribe = whatsapp.subscribeStatus(send);
+
+  req.on('close', () => {
+    unsubscribe();
+  });
+});
+
 app.post('/api/connect', (req, res) => {
   try {
     if (whatsapp.isReady()) {
@@ -175,4 +195,8 @@ app.post('/api/polls/:id/send-now', async (req, res) => {
 app.listen(PORT, HOST, () => {
   console.log(`Poll Scheduler running at http://${HOST}:${PORT}`);
   scheduler.start();
+  setTimeout(() => {
+    console.log('Pre-warming WhatsApp browser for faster QR...');
+    whatsapp.warmupConnection();
+  }, 500);
 });
