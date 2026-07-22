@@ -20,3 +20,17 @@ function apiUrl(path) {
 function apiFetch(path, options) {
   return fetch(apiUrl(path), options);
 }
+
+async function readApiJson(res) {
+  const text = await res.text();
+  if (!text) {
+    if (!res.ok) throw new Error(`Request failed (${res.status})`);
+    return null;
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(res.ok ? 'Invalid response from server' : `Request failed (${res.status})`);
+  }
+}

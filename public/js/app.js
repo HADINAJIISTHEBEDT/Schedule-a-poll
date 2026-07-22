@@ -430,15 +430,17 @@ async function searchChats(query) {
   try {
     const params = new URLSearchParams({ q: term, type: state.chatFilter });
     const res = await apiFetch(`/api/chats/search?${params}`);
-    if (!res.ok) throw new Error((await res.json()).error || 'Search failed');
+    const data = await readApiJson(res);
+    if (!res.ok) throw new Error(data?.error || 'Search failed');
 
     if (els.chatSearch.value.trim() === term) {
-      state.searchResults = await res.json();
+      state.searchResults = Array.isArray(data) ? data : [];
     }
   } catch (err) {
     if (els.chatSearch.value.trim() === term) {
       state.searchResults = [];
-      showToast(err.message || 'Search failed', 'error');
+      const message = err.message || 'Search failed';
+      showToast(message.includes('JSON') ? 'Search failed — try again in a few seconds' : message, 'error');
     }
   } finally {
     state.searching = false;

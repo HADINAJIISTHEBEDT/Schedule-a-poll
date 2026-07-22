@@ -101,16 +101,32 @@ async function readConnectedInfo(instance) {
   }
 }
 
-async function tryFinalizeReady(instance) {
-  if (!instance || connectionState === 'ready') return true;
+async function isClientFullyReady(instance) {
+  if (!instance?.pupPage) return false;
 
   try {
     const waState = await instance.getState();
     if (waState !== 'CONNECTED') return false;
-  } catch (err) {
-    console.error('Ready state check failed:', err.message);
+
+    return await instance.pupPage.evaluate(() => {
+      if (typeof window.WWebJS === 'undefined') return false;
+      try {
+        const collections = window.require('WAWebCollections');
+        return Boolean(collections?.Chat?.getModelsArray);
+      } catch {
+        return false;
+      }
+    });
+  } catch {
     return false;
   }
+}
+
+async function tryFinalizeReady(instance) {
+  if (!instance || connectionState === 'ready') return true;
+
+  const fullyReady = await isClientFullyReady(instance);
+  if (!fullyReady) return false;
 
   connectionState = 'ready';
   connectingSince = 0;
@@ -120,6 +136,9 @@ async function tryFinalizeReady(instance) {
   stopReadyCheck();
   emit('ready', connectedInfo);
   console.log('WhatsApp linked as', connectedInfo.pushname);
+  fetchAndCacheChats({ refresh: false, includeContacts: true }).catch((err) => {
+    console.error('Chat cache warmup failed:', err.message);
+  });
   return true;
 }
 
@@ -263,17 +282,15 @@ async function fetchAndCacheChats({ refresh = false, includeContacts = false } =
   for (let attempt = 1; attempt <= 4; attempt++) {
     try {
       const chats = await fetchChatsDirect({ includeContacts: false });
-      if (chats.length > 0) {
-        cachedChats = chats;
-        chatsCacheTime = Date.now();
+      cachedChats = chats;
+      chatsCacheTime = Date.now();
 
-        if (includeContacts) {
-          cachedContacts = (await fetchChatsDirect({ includeContacts: true })).filter((c) => !c.isGroup);
-          return mergeChatLists(cachedChats, cachedContacts);
-        }
-
-        return cachedChats;
+      if (includeContacts) {
+        cachedContacts = (await fetchChatsDirect({ includeContacts: true })).filter((c) => !c.isGroup);
+        return mergeChatLists(cachedChats, cachedContacts);
       }
+
+      return cachedChats;
     } catch (err) {
       lastError = err;
       console.error(`Chat fetch attempt ${attempt}/4 failed:`, err.message);
@@ -415,6 +432,9 @@ function createClient() {
     }
 
     emit('ready', connectedInfo);
+    fetchAndCacheChats({ refresh: false, includeContacts: true }).catch((err) => {
+      console.error('Chat cache warmup failed:', err.message);
+    });
   });
 
   instance.on('disconnected', (reason) => {
@@ -528,21 +548,30 @@ async function searchChats({ query = '', filter = 'all', includeContacts = true 
     throw new Error('WhatsApp is not connected');
   }
 
+  const fullyReady = await isClientFullyReady(client);
+  if (!fullyReady) {
+    throw new Error('WhatsApp is still syncing — wait a few seconds and try again');
+  }
+
   const term = query.trim().toLowerCase();
   if (term.length < 1) {
     return [];
   }
 
-  if (cachedChats.length === 0) {
-    await fetchAndCacheChats({ refresh: false, includeContacts: false });
-  }
-
-  if (includeContacts && !cachedContacts) {
-    try {
-      cachedContacts = (await fetchChatsDirect({ includeContacts: true })).filter((c) => !c.isGroup);
-    } catch (err) {
-      console.error('Contact search load failed:', err.message);
+  try {
+    if (cachedChats.length === 0) {
+      await fetchAndCacheChats({ refresh: false, includeContacts: false });
     }
+
+    if (includeContacts && !cachedContacts) {
+      try {
+        cachedContacts = (await fetchChatsDirect({ includeContacts: true })).filter((c) => !c.isGroup);
+      } catch (err) {
+        console.error('Contact search load failed:', err.message);
+      }
+    }
+  } catch (err) {
+    throw new Error(err.message || 'Could not load chats for search');
   }
 
   let pool = includeContacts && cachedContacts
