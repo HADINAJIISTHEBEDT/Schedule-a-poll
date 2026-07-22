@@ -10,6 +10,7 @@ const state = {
   searching: false,
   lastSearchQuery: '',
   connectInFlight: false,
+  qrDismissed: false,
 };
 
 const els = {
@@ -120,7 +121,11 @@ function renderChats() {
           ? 'Waiting for QR code...'
           : 'Connect WhatsApp first';
     html = `<p class="placeholder">${emptyMessage}</p>`;
-    if (lastQrUrl && (state.connectionState === 'qr' || state.connectionState === 'connecting')) {
+    if (
+      !state.qrDismissed &&
+      lastQrUrl &&
+      (state.connectionState === 'qr' || state.connectionState === 'connecting')
+    ) {
       html += `<div class="qr-inline"><img src="${lastQrUrl}" alt="WhatsApp QR code" /></div>`;
     }
     els.chatList.innerHTML = html;
@@ -190,29 +195,48 @@ function toLocalDatetime(date) {
 }
 
 function showQrLoading() {
+  if (state.qrDismissed) return;
   els.qrOverlay.classList.remove('hidden');
   if (els.qrLoading) els.qrLoading.classList.remove('hidden');
   if (els.qrImage) els.qrImage.classList.add('hidden');
   if (els.qrPanel) els.qrPanel.classList.remove('hidden');
 }
 
-function showQrOverlay(qr) {
+function showQrOverlay(qr, { force = false } = {}) {
   if (!qr) return;
   lastQrUrl = qr;
   if (els.qrLoading) els.qrLoading.classList.add('hidden');
   els.qrImage.src = qr;
   els.qrImage.classList.remove('hidden');
-  els.qrOverlay.classList.remove('hidden');
   if (els.qrInlineImage) els.qrInlineImage.src = qr;
-  if (els.qrPanel) els.qrPanel.classList.remove('hidden');
+  if (!state.qrDismissed || force) {
+    els.qrOverlay.classList.remove('hidden');
+    if (els.qrPanel) els.qrPanel.classList.remove('hidden');
+  }
 }
 
-function hideQrOverlay() {
+function hideQrOverlay({ dismiss = false } = {}) {
+  if (dismiss) state.qrDismissed = true;
   els.qrOverlay.classList.add('hidden');
   if (els.qrPanel) els.qrPanel.classList.add('hidden');
 }
 
+function openQrOverlay() {
+  state.qrDismissed = false;
+  els.qrOverlay.classList.remove('hidden');
+  if (lastQrUrl) {
+    if (els.qrLoading) els.qrLoading.classList.add('hidden');
+    els.qrImage.src = lastQrUrl;
+    els.qrImage.classList.remove('hidden');
+    if (els.qrInlineImage) els.qrInlineImage.src = lastQrUrl;
+    if (els.qrPanel) els.qrPanel.classList.remove('hidden');
+  } else if (state.connectionState === 'connecting' || state.connectionState === 'authenticated') {
+    showQrLoading();
+  }
+}
+
 function updateConnectionUI({ state: connState, qr, connectedInfo }) {
+  const wasReady = state.connectionState === 'ready';
   state.connectionState = connState;
   els.statusDot.className = `status-dot ${connState}`;
 
@@ -231,17 +255,19 @@ function updateConnectionUI({ state: connState, qr, connectedInfo }) {
     showQrOverlay(qr);
     renderChats();
   } else if (connState === 'ready') {
+    state.qrDismissed = false;
     hideQrOverlay();
+    if (!wasReady) showToast('WhatsApp connected!');
   } else if (connState === 'connecting' || connState === 'authenticated') {
-    els.qrOverlay.classList.remove('hidden');
-    if (connState === 'connecting' && !qr && !lastQrUrl) {
-      showQrLoading();
-    }
-    if (lastQrUrl && els.qrInlineImage) {
-      els.qrInlineImage.src = lastQrUrl;
-      if (els.qrPanel) els.qrPanel.classList.remove('hidden');
+    if (!state.qrDismissed) {
+      if (connState === 'connecting' && !qr && !lastQrUrl) {
+        showQrLoading();
+      } else if (lastQrUrl) {
+        showQrOverlay(lastQrUrl);
+      }
     }
   } else if (connState === 'disconnected' || connState === 'auth_failure') {
+    state.qrDismissed = false;
     hideQrOverlay();
     lastQrUrl = null;
   }
@@ -296,12 +322,21 @@ async function connect() {
     }
 
     if (status.state === 'qr' && status.qr) {
+      openQrOverlay();
       updateConnectionUI(status);
       showToast('Scan the QR code with your phone');
       pollStatus(true);
       return;
     }
 
+    if (status.state === 'connecting' || status.state === 'authenticated') {
+      if (state.qrDismissed) {
+        pollStatus(true);
+        return;
+      }
+    }
+
+    state.qrDismissed = false;
     showQrLoading();
     updateConnectionUI({ state: 'connecting' });
     pollStatus(true);
@@ -363,11 +398,6 @@ function pollStatus(fast = false) {
       const data = await res.json();
       updateConnectionUI(data);
       polls++;
-      if (data.state === 'qr' && data.qr) {
-        clearInterval(statusPollTimer);
-        statusPollTimer = null;
-        return;
-      }
       if (data.state === 'ready' || data.state === 'disconnected' || data.state === 'auth_failure') {
         clearInterval(statusPollTimer);
         statusPollTimer = null;
@@ -584,7 +614,7 @@ els.chatList.addEventListener('change', (e) => {
 });
 
 els.connectBtn.addEventListener('click', connect);
-els.closeQrBtn.addEventListener('click', () => els.qrOverlay.classList.add('hidden'));
+els.closeQrBtn.addEventListener('click', () => hideQrOverlay({ dismiss: true }));
 els.addOptionBtn.addEventListener('click', () => {
   if (state.options.length >= 12) return showToast('Maximum 12 options', 'error');
   state.options.push('');
