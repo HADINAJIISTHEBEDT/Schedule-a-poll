@@ -115,19 +115,11 @@ function startKeepalive(instance) {
       keepaliveMisses++;
       if (keepaliveMisses >= 6) {
         console.warn('WhatsApp keepalive: session unstable:', waState);
-        const recovered = await tryFinalizeReady(instance);
-        if (!recovered) {
-          await handleSessionLost();
-        } else {
-          keepaliveMisses = 0;
-        }
+        keepaliveMisses = 0;
       }
     } catch (err) {
       keepaliveMisses++;
       console.error('WhatsApp keepalive error:', err.message);
-      if (keepaliveMisses >= 6) {
-        await handleSessionLost();
-      }
     }
   }, 25000);
 }
@@ -137,19 +129,18 @@ async function handleSessionLost() {
   keepaliveMisses = 0;
   if (connectionState === 'disconnected') return;
 
+  console.warn('WhatsApp session lost — tap Connect to restore (session saved on disk)');
   connectionState = 'disconnected';
   connectedInfo = null;
-  const deadClient = client;
-  client = null;
-  resetWarmup();
-  if (deadClient) {
+  if (client) {
     try {
-      await deadClient.destroy();
+      await client.destroy();
     } catch {
       // ignore
     }
+    client = null;
   }
-  setTimeout(() => startConnection({ force: true }), 5000);
+  resetWarmup();
 }
 
 function stopReadyCheck() {
@@ -351,52 +342,70 @@ async function searchChatsDirect(term, filter = 'all', includeContacts = true) {
 
   return withTimeout(
     client.pupPage.evaluate(
-      (searchTerm, chatFilter, withContacts) => {
+      async (searchTerm, chatFilter, withContacts) => {
         const collections = window.require('WAWebCollections');
         const seen = new Set();
         const results = [];
         const needle = searchTerm.toLowerCase();
         const limit = 50;
 
-        const tryAdd = (id, name, isGroup) => {
-          if (!id || seen.has(id) || results.length >= limit) return;
-          if (chatFilter === 'groups' && !isGroup) return;
-          if (chatFilter === 'contacts' && isGroup) return;
+        const matches = (name, id) => {
           const label = (name || '').toLowerCase();
-          if (!label.includes(needle)) return;
-          seen.add(id);
-          results.push({ id, name: name || 'Unknown', isGroup });
+          const phone = String(id || '').split('@')[0].toLowerCase();
+          return label.includes(needle) || phone.includes(needle);
         };
 
-        for (const chat of collections.Chat.getModelsArray()) {
-          if (results.length >= limit) break;
-          const id = chat.id?._serialized || String(chat.id);
-          const name =
-            chat.formattedTitle ||
-            chat.name ||
-            chat.contact?.pushname ||
-            chat.contact?.name ||
-            (id.includes('@') ? id.split('@')[0] : id) ||
-            'Unknown';
-          const isGroup = Boolean(chat.groupMetadata) || id.endsWith('@g.us');
-          const isReadOnly = Boolean(chat.groupMetadata?.announce);
-          if (isReadOnly) continue;
-          tryAdd(id, name, isGroup);
-        }
+        const tryAdd = (id, name, isGroup) => {
+          if (!id || seen.has(id) || results.length >= limit) return false;
+          if (chatFilter === 'groups' && !isGroup) return false;
+          if (chatFilter === 'contacts' && isGroup) return false;
+          if (!matches(name, id)) return false;
+          seen.add(id);
+          results.push({ id, name: name || 'Unknown', isGroup });
+          return true;
+        };
 
-        if (withContacts && results.length < limit) {
-          const contacts = collections.Contact?.getModelsArray?.() || [];
+        const searchContacts = withContacts && chatFilter !== 'groups';
+        if (searchContacts) {
+          let contacts = collections.Contact?.getModelsArray?.() || [];
+          if (contacts.length === 0 && window.WWebJS?.getContacts) {
+            try {
+              contacts = await window.WWebJS.getContacts();
+            } catch {
+              contacts = [];
+            }
+          }
+
           for (const contact of contacts) {
             if (results.length >= limit) break;
-            const id = contact.id?._serialized || String(contact.id);
+            const id = contact.id?._serialized || contact.id || String(contact.id);
             if (!id || id.endsWith('@g.us') || contact.isMe) continue;
             const name =
               contact.pushname ||
               contact.name ||
               contact.shortName ||
+              contact.formattedName ||
               (id.includes('@') ? id.split('@')[0] : id) ||
               'Unknown';
             tryAdd(id, name, false);
+          }
+        }
+
+        if (chatFilter !== 'contacts') {
+          for (const chat of collections.Chat.getModelsArray()) {
+            if (results.length >= limit) break;
+            const id = chat.id?._serialized || String(chat.id);
+            const name =
+              chat.formattedTitle ||
+              chat.name ||
+              chat.contact?.pushname ||
+              chat.contact?.name ||
+              (id.includes('@') ? id.split('@')[0] : id) ||
+              'Unknown';
+            const isGroup = Boolean(chat.groupMetadata) || id.endsWith('@g.us');
+            const isReadOnly = Boolean(chat.groupMetadata?.announce);
+            if (isReadOnly) continue;
+            tryAdd(id, name, isGroup);
           }
         }
 
@@ -653,11 +662,7 @@ function createClient() {
     connectingSince = 0;
     resetWarmup();
     emit('disconnected', reason);
-
-    if (reason !== 'LOGOUT') {
-      console.log('WhatsApp disconnected, reconnecting in 5s:', reason);
-      setTimeout(() => startConnection({ force: true }), 5000);
-    }
+    console.log('WhatsApp disconnected:', reason, '— session kept until manual disconnect');
   });
 
   instance.on('auth_failure', (msg) => {
@@ -717,10 +722,6 @@ async function initialize({ force = false, resetSession = false } = {}) {
         break;
       }
 
-      if (attempt === 1) {
-        clearSessionData();
-      }
-
       await sleep(500);
     }
   }
@@ -736,9 +737,18 @@ async function initialize({ force = false, resetSession = false } = {}) {
   throw new Error(message);
 }
 
-async function disconnect({ preserveState = false } = {}) {
+async function disconnect({ preserveState = false, userInitiated = false } = {}) {
   stopReadyCheck();
   stopKeepalive();
+
+  if (client && userInitiated) {
+    try {
+      await client.logout();
+    } catch {
+      // ignore — destroy below still clears the runtime session
+    }
+  }
+
   if (client) {
     try {
       await client.destroy();
@@ -747,18 +757,27 @@ async function disconnect({ preserveState = false } = {}) {
     }
     client = null;
   }
+
   clearBrowserLocks();
-  if (!preserveState) {
+  connectedInfo = null;
+  cachedChats = [];
+  cachedContacts = null;
+  chatsCacheTime = 0;
+
+  if (userInitiated) {
+    clearSessionData();
+    connectionState = 'disconnected';
+    connectingSince = 0;
+    lastQr = null;
+    lastQrDataUrl = null;
+    resetWarmup();
+  } else if (!preserveState) {
     connectionState = 'disconnected';
     connectingSince = 0;
     lastQr = null;
     lastQrDataUrl = null;
     resetWarmup();
   }
-  connectedInfo = null;
-  cachedChats = [];
-  cachedContacts = null;
-  chatsCacheTime = 0;
 }
 
 async function searchChats({ query = '', filter = 'all', includeContacts = true } = {}) {
@@ -927,10 +946,21 @@ function startConnection({ force = false, resetSession = false } = {}) {
     });
 }
 
-/** Start browser in background when page loads so QR is ready faster on Connect. */
+function hasSavedSession() {
+  try {
+    return fs.existsSync(SESSION_PATH) && fs.readdirSync(SESSION_PATH).length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/** Restore saved session on startup or when the app checks status. */
 function warmupConnection() {
   if (warmupStarted || isReady() || initInProgress) return;
   if (connectionState === 'qr' || connectionState === 'connecting' || connectionState === 'authenticated') {
+    return;
+  }
+  if (connectionState === 'disconnected' && !hasSavedSession()) {
     return;
   }
   warmupStarted = true;

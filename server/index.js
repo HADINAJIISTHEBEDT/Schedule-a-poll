@@ -72,7 +72,7 @@ app.post('/api/connect', async (req, res) => {
 
 app.post('/api/disconnect', async (_req, res) => {
   try {
-    await whatsapp.disconnect();
+    await whatsapp.disconnect({ userInitiated: true });
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
