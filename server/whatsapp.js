@@ -127,7 +127,9 @@ async function getChats({ refresh = false } = {}) {
 }
 
 async function initialize() {
-  if (client) return;
+  if (client) {
+    await disconnect();
+  }
 
   clearSession();
 

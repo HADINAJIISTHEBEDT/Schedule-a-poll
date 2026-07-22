@@ -14,7 +14,23 @@ app.use(express.static(path.join(__dirname, '..', 'public')));
 
 const apkPath = path.join(__dirname, '..', 'releases', 'poll-scheduler.apk');
 
+app.get('/api/health', (_req, res) => res.json({ ok: true }));
+
 app.get('/api/status', (_req, res) => res.json(whatsapp.getStatus()));
+
+app.post('/api/reset', async (_req, res) => {
+  try {
+    await whatsapp.disconnect();
+    db.wipeAll();
+    const sessionPath = path.join(__dirname, '..', 'data', 'whatsapp-session');
+    if (fs.existsSync(sessionPath)) {
+      fs.rmSync(sessionPath, { recursive: true, force: true });
+    }
+    res.json({ ok: true, message: 'All data wiped' });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
 
 app.post('/api/connect', async (_req, res) => {
   try {
