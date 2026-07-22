@@ -40,15 +40,17 @@ app.get('/api/status', (_req, res) => {
   res.json(whatsapp.getStatus());
 });
 
-app.post('/api/connect', async (_req, res) => {
+app.post('/api/connect', async (req, res) => {
   try {
     if (whatsapp.isReady()) {
-      return res.json({ ok: true, message: 'Already connected' });
+      return res.json({ ok: true, message: 'Already connected', ...whatsapp.getStatus() });
     }
-    await whatsapp.initialize();
-    res.json({ ok: true, message: 'Connecting — scan the QR code' });
+    const force = req.body?.force === true || req.query.force === '1';
+    await whatsapp.initialize({ force });
+    res.json({ ok: true, message: 'Connecting — scan the QR code', ...whatsapp.getStatus() });
   } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
+    console.error('POST /api/connect error:', err.message);
+    res.status(500).json({ ok: false, error: err.message, ...whatsapp.getStatus() });
   }
 });
 

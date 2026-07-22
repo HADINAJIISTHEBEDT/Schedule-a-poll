@@ -27,6 +27,8 @@ const els = {
   allowMultiple: $('#allowMultiple'),
   chatSearch: $('#chatSearch'),
   chatList: $('#chatList'),
+  qrPanel: $('#qrPanel'),
+  qrInlineImage: $('#qrInlineImage'),
   chatSummary: $('#chatSummary'),
   refreshChatsBtn: $('#refreshChatsBtn'),
   selectedCount: $('#selectedCount'),
@@ -47,6 +49,8 @@ const els = {
 
 let searchTimer = null;
 let chatCounts = { groups: 0, contacts: 0 };
+let lastQrUrl = null;
+let statusPollTimer = null;
 
 function showToast(message, type = 'success') {
   els.toast.textContent = message;
@@ -114,11 +118,15 @@ function renderChats(filter = '') {
       state.connectionState === 'ready'
         ? 'No chats loaded yet. Tap Refresh above.'
         : state.connectionState === 'qr'
-          ? 'Scan the QR code to connect WhatsApp, then your chats will appear here.'
+          ? 'Scan the QR code below with your phone.'
           : state.connectionState === 'authenticated' || state.connectionState === 'connecting'
-            ? 'Connecting to WhatsApp...'
+            ? 'Waiting for QR code...'
             : 'Click Connect WhatsApp above to load your chats';
-    els.chatList.innerHTML = `<p class="placeholder">${state.chats.length ? 'No chats match your search' : emptyMessage}</p>`;
+    let html = `<p class="placeholder">${state.chats.length ? 'No chats match your search' : emptyMessage}</p>`;
+    if (lastQrUrl && (state.connectionState === 'qr' || state.connectionState === 'connecting')) {
+      html += `<div class="qr-inline"><img src="${lastQrUrl}" alt="WhatsApp QR code" /></div>`;
+    }
+    els.chatList.innerHTML = html;
     return;
   }
 
@@ -201,6 +209,20 @@ function toLocalDatetime(date) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
+function showQrOverlay(qr) {
+  if (!qr) return;
+  lastQrUrl = qr;
+  els.qrImage.src = qr;
+  els.qrOverlay.classList.remove('hidden');
+  if (els.qrInlineImage) els.qrInlineImage.src = qr;
+  if (els.qrPanel) els.qrPanel.classList.remove('hidden');
+}
+
+function hideQrOverlay() {
+  els.qrOverlay.classList.add('hidden');
+  if (els.qrPanel) els.qrPanel.classList.add('hidden');
+}
+
 function updateConnectionUI({ state: connState, qr, connectedInfo }) {
   const wasReady = state.connectionState === 'ready';
   state.connectionState = connState;
@@ -218,13 +240,21 @@ function updateConnectionUI({ state: connState, qr, connectedInfo }) {
   els.statusText.textContent = labels[connState] || connState;
 
   if (connState === 'qr' && qr) {
-    els.qrImage.src = qr;
-    els.qrOverlay.classList.remove('hidden');
+    showQrOverlay(qr);
     renderChats();
+  } else if (connState === 'ready') {
+    hideQrOverlay();
+  } else if (connState === 'connecting' || connState === 'authenticated') {
+    if (lastQrUrl && els.qrInlineImage) {
+      els.qrInlineImage.src = lastQrUrl;
+      if (els.qrPanel) els.qrPanel.classList.remove('hidden');
+    }
+  } else if (connState === 'disconnected' || connState === 'auth_failure') {
+    hideQrOverlay();
+    lastQrUrl = null;
   }
 
   if (connState === 'ready') {
-    els.qrOverlay.classList.add('hidden');
     els.connectBtn.textContent = 'Disconnect';
     if (!wasReady && !state.chatsLoaded && !state.loadingChats) {
       loadChats(true);
@@ -247,6 +277,9 @@ async function fetchStatus() {
     const res = await apiFetch('/api/status');
     const data = await res.json();
     updateConnectionUI(data);
+    if (data.state === 'connecting' || data.state === 'qr' || data.state === 'authenticated') {
+      pollStatus();
+    }
   } catch {
     updateConnectionUI({ state: 'disconnected' });
   }
@@ -274,20 +307,41 @@ async function connect() {
     return;
   }
 
-  await apiFetch('/api/connect', { method: 'POST' });
-  showToast('Connecting — scan the QR code');
+  const connectRes = await apiFetch('/api/connect', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ force: status.state === 'connecting' && !status.qr }),
+  });
+  const connectData = await connectRes.json();
+  if (!connectRes.ok) {
+    showToast(connectData.error || 'Failed to connect', 'error');
+    return;
+  }
+  updateConnectionUI(connectData);
+  showToast(connectData.qr ? 'Scan the QR code' : 'Connecting — waiting for QR code...');
   pollStatus();
 }
 
 function pollStatus() {
-  const interval = setInterval(async () => {
-    const res = await apiFetch('/api/status');
-    const data = await res.json();
-    updateConnectionUI(data);
-    if (data.state === 'ready' || data.state === 'disconnected' || data.state === 'auth_failure') {
-      clearInterval(interval);
+  if (statusPollTimer) clearInterval(statusPollTimer);
+
+  const tick = async () => {
+    try {
+      const res = await apiFetch('/api/status');
+      const data = await res.json();
+      updateConnectionUI(data);
+      if (data.state === 'ready' || data.state === 'disconnected' || data.state === 'auth_failure') {
+        clearInterval(statusPollTimer);
+        statusPollTimer = null;
+      }
+    } catch {
+      clearInterval(statusPollTimer);
+      statusPollTimer = null;
     }
-  }, 1000);
+  };
+
+  tick();
+  statusPollTimer = setInterval(tick, 1000);
 }
 
 function needsContacts() {

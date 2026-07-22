@@ -28,7 +28,9 @@ let cachedChats = [];
 let cachedContacts = null;
 let chatsLoading = false;
 let chatsCacheTime = 0;
+let connectingSince = 0;
 const CHATS_CACHE_TTL = 5 * 60 * 1000;
+const CONNECTING_TIMEOUT_MS = 45 * 1000;
 
 function formatChat(chat) {
   const name = chat.name || chat.id?.user || chat.id?._serialized || 'Unknown chat';
@@ -203,9 +205,24 @@ function getStatus() {
   };
 }
 
-async function initialize() {
-  if (client) return;
+async function initialize({ force = false } = {}) {
+  const connectingTimedOut =
+    connectionState === 'connecting' &&
+    connectingSince > 0 &&
+    Date.now() - connectingSince > CONNECTING_TIMEOUT_MS;
 
+  if (client && !force && !connectingTimedOut) {
+    if (connectionState === 'ready') return;
+    if (connectionState === 'qr' && lastQrDataUrl) return;
+    if (connectionState === 'authenticated') return;
+    if (connectionState === 'connecting') return;
+  }
+
+  if (client) {
+    await disconnect();
+  }
+
+  connectingSince = Date.now();
   client = new Client({
     authStrategy: new LocalAuth({
       dataPath: path.join(__dirname, '..', 'data', 'whatsapp-session'),
@@ -232,6 +249,7 @@ async function initialize() {
   client.on('qr', async (qr) => {
     try {
       connectionState = 'qr';
+      connectingSince = 0;
       lastQr = qr;
       lastQrDataUrl = await qrcode.toDataURL(qr);
       emit('qr', lastQrDataUrl);
@@ -291,7 +309,15 @@ async function initialize() {
   });
 
   connectionState = 'connecting';
-  await client.initialize();
+  connectingSince = Date.now();
+  try {
+    await client.initialize();
+  } catch (err) {
+    connectionState = 'disconnected';
+    connectingSince = 0;
+    client = null;
+    throw err;
+  }
 }
 
 async function disconnect() {
@@ -304,6 +330,7 @@ async function disconnect() {
   cachedChats = [];
   cachedContacts = null;
   chatsCacheTime = 0;
+  connectingSince = 0;
   lastQr = null;
   lastQrDataUrl = null;
 }

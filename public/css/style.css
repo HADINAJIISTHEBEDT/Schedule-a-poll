@@ -474,6 +474,34 @@ input:focus {
 .qr-overlay.hidden { display: none; }
 .hidden { display: none !important; }
 
+.qr-panel {
+  margin-bottom: 16px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  text-align: center;
+}
+
+.qr-panel-title {
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+
+.qr-inline {
+  display: flex;
+  justify-content: center;
+  margin: 12px 0;
+}
+
+.qr-inline img {
+  width: 220px;
+  height: 220px;
+  border-radius: 8px;
+  background: #fff;
+  padding: 8px;
+}
+
 .qr-card {
   background: var(--surface);
   border: 1px solid var(--border);
