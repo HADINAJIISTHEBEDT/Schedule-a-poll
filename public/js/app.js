@@ -49,6 +49,42 @@ const els = {
 let searchTimer = null;
 let lastQrUrl = null;
 let statusPollTimer = null;
+let eventSource = null;
+
+function subscribeEvents() {
+  if (typeof EventSource === 'undefined') return;
+  if (eventSource) {
+    eventSource.close();
+    eventSource = null;
+  }
+
+  eventSource = new EventSource(apiUrl('/api/events'));
+  eventSource.onmessage = (event) => {
+    try {
+      const data = JSON.parse(event.data);
+      updateConnectionUI(data);
+      if (data.state === 'qr' && data.qr) {
+        stopStatusPoll();
+      }
+    } catch {
+      // ignore malformed events
+    }
+  };
+  eventSource.onerror = () => {
+    if (eventSource) {
+      eventSource.close();
+      eventSource = null;
+    }
+    setTimeout(subscribeEvents, 2000);
+  };
+}
+
+function stopStatusPoll() {
+  if (statusPollTimer) {
+    clearInterval(statusPollTimer);
+    statusPollTimer = null;
+  }
+}
 
 function showToast(message, type = 'success') {
   els.toast.textContent = message;
@@ -281,9 +317,16 @@ async function connect() {
     els.connectBtn.disabled = true;
     els.connectBtn.textContent = 'Connecting...';
 
+    if (state.connectionState !== 'ready') {
+      showQrLoading();
+      updateConnectionUI({ state: 'connecting' });
+      pollStatus(true);
+    }
+
     const status = await apiFetch('/api/status').then((r) => r.json());
 
     if (status.state === 'ready') {
+      hideQrOverlay();
       await apiFetch('/api/disconnect', { method: 'POST' });
       state.searchResults = [];
       state.selectedChats.clear();
@@ -298,12 +341,12 @@ async function connect() {
     if (status.state === 'qr' && status.qr) {
       updateConnectionUI(status);
       showToast('Scan the QR code with your phone');
-      pollStatus(true);
+      stopStatusPoll();
       return;
     }
 
     showQrLoading();
-    updateConnectionUI({ state: 'connecting' });
+    updateConnectionUI({ state: 'connecting', qr: status.qr });
     pollStatus(true);
 
     const stuckConnecting = status.state === 'connecting' && !status.qr;
@@ -335,6 +378,7 @@ async function connect() {
     updateConnectionUI(connectData);
     if (connectData.qr) {
       showToast('Scan the QR code');
+      stopStatusPoll();
     }
   } catch (err) {
     showToast(err.message || 'Could not reach server', 'error');
@@ -351,11 +395,11 @@ async function connect() {
 }
 
 function pollStatus(fast = false) {
-  if (statusPollTimer) clearInterval(statusPollTimer);
+  stopStatusPoll();
 
-  const interval = fast ? 300 : 1000;
+  const interval = fast ? 200 : 1000;
   let polls = 0;
-  const maxPolls = fast ? 40 : 120;
+  const maxPolls = fast ? 50 : 120;
 
   const tick = async () => {
     try {
@@ -364,22 +408,18 @@ function pollStatus(fast = false) {
       updateConnectionUI(data);
       polls++;
       if (data.state === 'qr' && data.qr) {
-        clearInterval(statusPollTimer);
-        statusPollTimer = null;
+        stopStatusPoll();
         return;
       }
       if (data.state === 'ready' || data.state === 'disconnected' || data.state === 'auth_failure') {
-        clearInterval(statusPollTimer);
-        statusPollTimer = null;
+        stopStatusPoll();
       }
       if (polls >= maxPolls && data.state === 'connecting') {
-        clearInterval(statusPollTimer);
-        statusPollTimer = null;
+        stopStatusPoll();
         showToast('Taking longer than expected — tap Connect again', 'error');
       }
     } catch {
-      clearInterval(statusPollTimer);
-      statusPollTimer = null;
+      stopStatusPoll();
     }
   };
 
@@ -631,6 +671,7 @@ function saveServerSettings() {
   setApiBase(url);
   closeServerSettings();
   showToast('Server saved');
+  subscribeEvents();
   fetchStatus();
   loadPolls();
 }
@@ -648,6 +689,7 @@ setDefaultSchedule();
 if (isCapacitorApp() && !getApiBase()) {
   openServerSettings();
 } else {
+  subscribeEvents();
   fetchStatus();
   loadPolls();
 }
