@@ -1,10 +1,13 @@
 const $ = (sel) => document.querySelector(sel);
+const PAGE_SIZE = 50;
 
 const state = {
   chats: [],
+  visibleChats: [],
   selectedChats: new Set(),
   options: ['', ''],
   chatFilter: 'all',
+  visibleCount: PAGE_SIZE,
 };
 
 const els = {
@@ -87,11 +90,22 @@ function renderChats(filter = '') {
 
   if (filtered.length === 0) {
     els.chatList.innerHTML = `<p class="placeholder">${state.chats.length ? 'No chats match your search' : 'Connect WhatsApp to load your chats'}</p>`;
+    state.visibleChats = [];
     return;
   }
 
-  const renderItem = (chat) => `
-    <label class="chat-item ${state.selectedChats.has(chat.id) ? 'selected' : ''}" data-id="${chat.id}">
+  let list = [];
+  if (state.chatFilter === 'all') {
+    list = [...groups, ...contacts];
+  } else {
+    list = filtered;
+  }
+
+  const shown = list.slice(0, state.visibleCount);
+  state.visibleChats = shown;
+
+  const renderItem = (chat, idx) => `
+    <label class="chat-item ${state.selectedChats.has(chat.id) ? 'selected' : ''}" data-idx="${idx}">
       <input type="checkbox" ${state.selectedChats.has(chat.id) ? 'checked' : ''} />
       <div>
         <div class="chat-name">${escapeHtml(chat.name)}</div>
@@ -102,32 +116,49 @@ function renderChats(filter = '') {
   let html = '';
 
   if (state.chatFilter === 'all') {
-    if (groups.length) {
+    const shownGroups = shown.filter((c) => c.isGroup);
+    const shownContacts = shown.filter((c) => !c.isGroup);
+    if (shownGroups.length) {
       html += `<div class="chat-section-title">Groups (${groups.length})</div>`;
-      html += groups.map(renderItem).join('');
+      html += shownGroups.map((c) => renderItem(c, shown.indexOf(c))).join('');
     }
-    if (contacts.length) {
+    if (shownContacts.length) {
       html += `<div class="chat-section-title">Contacts (${contacts.length})</div>`;
-      html += contacts.map(renderItem).join('');
+      html += shownContacts.map((c) => renderItem(c, shown.indexOf(c))).join('');
     }
   } else {
-    html = filtered.map(renderItem).join('');
+    html = shown.map((c, i) => renderItem(c, i)).join('');
+  }
+
+  if (list.length > state.visibleCount) {
+    const left = list.length - state.visibleCount;
+    html += `<button type="button" class="btn btn-ghost btn-sm load-more-chats">Show ${Math.min(left, PAGE_SIZE)} more (${left} left)</button>`;
   }
 
   els.chatList.innerHTML = html;
 
+  els.chatList.querySelectorAll('.load-more-chats').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.visibleCount += PAGE_SIZE;
+      renderChats(els.chatSearch.value);
+    });
+  });
+
   els.chatList.querySelectorAll('.chat-item').forEach((item) => {
+    const idx = Number(item.dataset.idx);
+    const chat = state.visibleChats[idx];
+    if (!chat) return;
+
     item.addEventListener('click', (e) => {
       if (e.target.tagName === 'INPUT') return;
-      const id = item.dataset.id;
       const checkbox = item.querySelector('input');
       checkbox.checked = !checkbox.checked;
-      toggleChat(id, checkbox.checked);
+      toggleChat(chat.id, checkbox.checked);
       item.classList.toggle('selected', checkbox.checked);
     });
 
     item.querySelector('input').addEventListener('change', (e) => {
-      toggleChat(item.dataset.id, e.target.checked);
+      toggleChat(chat.id, e.target.checked);
       item.classList.toggle('selected', e.target.checked);
     });
   });
@@ -388,12 +419,16 @@ els.addOptionBtn.addEventListener('click', () => {
   state.options.push('');
   renderOptions();
 });
-els.chatSearch.addEventListener('input', (e) => renderChats(e.target.value));
+els.chatSearch.addEventListener('input', (e) => {
+  state.visibleCount = PAGE_SIZE;
+  renderChats(e.target.value);
+});
 document.querySelectorAll('.chat-filter').forEach((btn) => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.chat-filter').forEach((b) => b.classList.remove('active'));
     btn.classList.add('active');
     state.chatFilter = btn.dataset.filter;
+    state.visibleCount = PAGE_SIZE;
     renderChats(els.chatSearch.value);
   });
 });
