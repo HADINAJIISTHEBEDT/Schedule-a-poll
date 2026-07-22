@@ -7,7 +7,11 @@ const scheduler = require('./scheduler');
 const { firebaseConfig, isFirebaseConfigured, initFirebaseAdmin } = require('./firebase');
 
 if (isFirebaseConfigured()) {
-  initFirebaseAdmin();
+  try {
+    initFirebaseAdmin();
+  } catch (err) {
+    console.error('Firebase init failed, falling back to SQLite:', err.message);
+  }
 }
 
 const app = express();
