@@ -37,12 +37,29 @@ app.post('/api/connect', async (_req, res) => {
     if (whatsapp.isReady()) {
       return res.json({ ok: true, message: 'Already connected', ...whatsapp.getStatus() });
     }
+
     const status = whatsapp.getStatus();
-    if (status.state === 'connecting' && !status.qr) {
+    if (status.state === 'connecting' || status.state === 'qr') {
       await whatsapp.disconnect();
     }
+
     await whatsapp.initialize();
-    res.json({ ok: true, message: 'Scan the QR code', ...whatsapp.getStatus() });
+    const finalStatus = await whatsapp.waitForQrOrReady();
+
+    if (finalStatus.state === 'ready' && !finalStatus.qr) {
+      await whatsapp.disconnect();
+      return res.status(409).json({
+        ok: false,
+        error: 'Session restored without QR — disconnected. Click Connect again to scan QR.',
+        ...whatsapp.getStatus(),
+      });
+    }
+
+    res.json({
+      ok: true,
+      message: finalStatus.qr ? 'Scan the QR code' : 'Connecting...',
+      ...finalStatus,
+    });
   } catch (err) {
     console.error('Connect error:', err.message);
     await whatsapp.disconnect().catch(() => {});

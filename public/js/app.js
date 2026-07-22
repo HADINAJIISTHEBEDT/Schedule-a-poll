@@ -95,8 +95,9 @@ function renderChats(term = '') {
   const item = (c) => {
     const id = safeId(c.id);
     const sel = state.selected.has(c.id);
-    return `<div class="chat-item${sel ? ' selected' : ''}" data-id="${esc(c.id)}">
-      <input type="checkbox" id="${id}" ${sel ? 'checked' : ''} />
+    const attrId = c.id.replace(/"/g, '&quot;');
+    return `<div class="chat-item${sel ? ' selected' : ''}" data-id="${attrId}">
+      <input type="checkbox" class="chat-check" id="${id}" ${sel ? 'checked' : ''} />
       <label for="${id}"><span class="chat-name">${esc(c.name)}</span>
       <span class="chat-meta">${c.isGroup ? 'Group' : 'Chat'}</span></label>
     </div>`;
@@ -191,48 +192,77 @@ function startPoll() {
 }
 
 async function toggleConnect() {
-  const data = await (await apiFetch('/api/status')).json();
+  els.connectBtn.disabled = true;
 
-  if (data.state === 'ready') {
-    await apiFetch('/api/disconnect', { method: 'POST' });
-    state.chats = [];
-    state.selected.clear();
-    toast('Disconnected');
-    return getStatus();
-  }
+  try {
+    const data = await (await apiFetch('/api/status')).json();
 
-  if (data.state === 'qr') {
-    setConn(data);
+    if (data.state === 'ready') {
+      await apiFetch('/api/disconnect', { method: 'POST' });
+      state.chats = [];
+      state.selected.clear();
+      toast('Disconnected — scan QR to connect again');
+      return getStatus();
+    }
+
+    if (data.state === 'qr' && data.qr) {
+      setConn(data);
+      startPoll();
+      return;
+    }
+
+    els.statusText.textContent = 'Connecting...';
+    const res = await apiFetch('/api/connect', { method: 'POST' });
+    const body = await res.json();
+    if (!res.ok) {
+      toast(body.error || 'Connect failed', 'error');
+      return getStatus();
+    }
+    setConn(body);
+    if (body.qr) {
+      toast('Scan the QR code with your phone');
+    } else if (body.state === 'ready') {
+      toast('Connected');
+    } else {
+      toast('Waiting for QR code...');
+    }
     startPoll();
-    return;
+  } finally {
+    els.connectBtn.disabled = false;
   }
-
-  const res = await apiFetch('/api/connect', { method: 'POST' });
-  const body = await res.json();
-  if (!res.ok) return toast(body.error || 'Connect failed', 'error');
-  setConn(body);
-  toast(body.qr ? 'Scan the QR code' : 'Waiting for QR...');
-  startPoll();
 }
 
-async function loadChats(refresh = false) {
-  if (state.loading) return;
+async function loadChats(refresh = false, attempt = 1) {
+  if (state.loading && attempt === 1) return;
   state.loading = true;
   state.visible = PAGE;
   els.chatList.innerHTML = '<p class="placeholder">Loading chats...</p>';
 
   try {
-    const url = refresh ? '/api/chats?refresh=1' : '/api/chats';
+    const url = refresh || attempt > 1 ? '/api/chats?refresh=1' : '/api/chats';
     const res = await apiFetch(url);
     if (!res.ok) throw new Error((await res.json()).error || 'Failed');
     state.chats = await res.json();
     renderChats(els.chatSearch.value);
     scrollToChats();
-    if (!state.chats.length && state.conn === 'ready' && !refresh) {
-      await new Promise((r) => setTimeout(r, 2000));
-      return loadChats(true);
+
+    if (!state.chats.length && state.conn === 'ready' && attempt < 6) {
+      els.chatList.innerHTML = `<p class="placeholder">Syncing chats... (${attempt}/6)</p>`;
+      await new Promise((r) => setTimeout(r, 3000));
+      state.loading = false;
+      return loadChats(true, attempt + 1);
+    }
+
+    if (!state.chats.length && state.conn === 'ready') {
+      els.chatList.innerHTML = '<p class="placeholder">No chats found — tap Refresh</p>';
     }
   } catch (e) {
+    if (state.conn === 'ready' && attempt < 6) {
+      els.chatList.innerHTML = `<p class="placeholder">Syncing chats... (${attempt}/6)</p>`;
+      await new Promise((r) => setTimeout(r, 3000));
+      state.loading = false;
+      return loadChats(true, attempt + 1);
+    }
     els.chatList.innerHTML = '<p class="placeholder">Failed — tap Refresh</p>';
     toast(e.message, 'error');
   } finally {
@@ -344,13 +374,27 @@ els.chatList.onclick = (e) => {
   }
   const row = e.target.closest('.chat-item');
   if (!row) return;
-  const cb = row.querySelector('input');
+  const chatId = row.getAttribute('data-id');
+  const cb = row.querySelector('.chat-check');
+  if (!cb || !chatId) return;
   if (e.target !== cb) cb.checked = !cb.checked;
-  if (cb.checked) state.selected.add(row.dataset.id);
-  else state.selected.delete(row.dataset.id);
+  if (cb.checked) state.selected.add(chatId);
+  else state.selected.delete(chatId);
   row.classList.toggle('selected', cb.checked);
-  els.selectedCount.textContent = `${state.selected.size} chats selected`;
+  els.selectedCount.textContent = `${state.selected.size} chat${state.selected.size !== 1 ? 's' : ''} selected`;
 };
+
+els.chatList.addEventListener('change', (e) => {
+  if (!e.target.classList.contains('chat-check')) return;
+  const row = e.target.closest('.chat-item');
+  if (!row) return;
+  const chatId = row.getAttribute('data-id');
+  if (!chatId) return;
+  if (e.target.checked) state.selected.add(chatId);
+  else state.selected.delete(chatId);
+  row.classList.toggle('selected', e.target.checked);
+  els.selectedCount.textContent = `${state.selected.size} chat${state.selected.size !== 1 ? 's' : ''} selected`;
+});
 
 document.querySelectorAll('.chat-filter').forEach((btn) => {
   btn.onclick = () => {
