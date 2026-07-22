@@ -273,8 +273,12 @@ input:focus {
 
 .chat-results {
   display: none;
-  max-height: 240px;
+  max-height: min(360px, 55vh);
   overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
   border: 1px solid var(--border);
   border-top: none;
   border-radius: 0 0 var(--radius) var(--radius);
@@ -284,6 +288,12 @@ input:focus {
 
 .chat-search-wrap.has-results .chat-results {
   display: block;
+}
+
+@media (max-width: 600px) {
+  .chat-results {
+    max-height: 50vh;
+  }
 }
 
 .chat-search {
@@ -345,6 +355,8 @@ input:focus {
   cursor: pointer;
   border-bottom: 1px solid var(--border);
   transition: background 0.1s;
+  flex-shrink: 0;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .chat-item input[type="checkbox"] {

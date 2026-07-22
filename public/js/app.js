@@ -106,6 +106,8 @@ function setSearchDropdownOpen(open) {
 
 function renderChats() {
   const query = els.chatSearch.value.trim();
+  const previousScroll = els.chatList?.scrollTop || 0;
+  const preserveScroll = state.searchResults.length > 0 && query === state.lastSearchQuery;
   let html = '';
 
   if (state.connectionState !== 'ready') {
@@ -152,6 +154,9 @@ function renderChats() {
     .join('');
 
   els.chatList.innerHTML = html;
+  if (preserveScroll && previousScroll > 0) {
+    els.chatList.scrollTop = previousScroll;
+  }
   updateSelectedCount();
 }
 
