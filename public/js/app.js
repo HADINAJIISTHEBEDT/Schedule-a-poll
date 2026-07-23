@@ -249,8 +249,13 @@ function updateConnectionUI({ state: connState, qr, connectedInfo, hasSession, r
     auth_failure: 'Auth failed',
   };
 
+  if ((connState === 'connecting' || connState === 'authenticated') && hasSession && !qr) {
+    // fall through — restoring handled below
+  }
+
   if (restoring) {
-    els.statusText.textContent = 'Restoring saved login...';
+    els.statusText.textContent =
+      connState === 'authenticated' ? 'Linked — finishing sync...' : 'Restoring saved login...';
   } else {
     els.statusText.textContent = labels[connState] || connState;
   }

@@ -72,8 +72,11 @@ let keepaliveMisses = 0;
 const CHATS_CACHE_TTL = 5 * 60 * 1000;
 const FATAL_WA_STATES = new Set(['UNPAIRED', 'UNPAIRED_IDLE', 'DISCONNECTED', 'LOGOUT']);
 const CONNECTING_TIMEOUT_MS = 45 * 1000;
+const RESTORE_TIMEOUT_MS = 3 * 60 * 1000;
 const QR_TARGET_MS = 10000;
 const SEARCH_TIMEOUT_MS = 25000;
+const STATE_CHECK_TIMEOUT_MS = 8000;
+let readyMisses = 0;
 
 function withTimeout(promise, ms, label) {
   return Promise.race([
@@ -188,8 +191,53 @@ async function readConnectedInfo(instance) {
 
 async function isSessionConnected(instance) {
   if (!instance?.pupPage) return false;
+
+  // Fast path: page-level check (avoids hanging Client.getState on Render/cloud)
   try {
-    return (await instance.getState()) === 'CONNECTED';
+    const pageState = await withTimeout(
+      instance.pupPage.evaluate(() => {
+        try {
+          const conn = window.require('WAWebConnModel')?.Conn;
+          const state = conn?.state || conn?.stream || null;
+          const hasMe = Boolean(
+            window.require('WAWebUserPrefsMeUser')?.getMaybeMePnUser?.() ||
+              window.require('WAWebUserPrefsMeUser')?.getMaybeMeLidUser?.()
+          );
+          const hasWWebJS = typeof window.WWebJS !== 'undefined';
+          const chatReady = Boolean(
+            window.require('WAWebCollections')?.Chat?.getModelsArray
+          );
+          return {
+            state: state ? String(state) : null,
+            hasMe,
+            hasWWebJS,
+            chatReady,
+          };
+        } catch {
+          return { state: null, hasMe: false, hasWWebJS: false, chatReady: false };
+        }
+      }),
+      STATE_CHECK_TIMEOUT_MS,
+      'Page state'
+    );
+
+    if (pageState?.hasMe && (pageState.chatReady || pageState.hasWWebJS)) {
+      return true;
+    }
+    if (pageState?.state && /CONNECTED|OPENING|PAIRING|SYNCING|NORMAL/i.test(pageState.state)) {
+      return true;
+    }
+  } catch {
+    // fall through to getState
+  }
+
+  try {
+    const waState = await withTimeout(
+      instance.getState(),
+      STATE_CHECK_TIMEOUT_MS,
+      'WhatsApp getState'
+    );
+    return waState === 'CONNECTED' || waState === 'OPENING';
   } catch {
     return false;
   }
@@ -200,17 +248,22 @@ async function isClientFullyReady(instance) {
   if (!(await isSessionConnected(instance))) return false;
 
   try {
-    return await instance.pupPage.evaluate(() => {
-      if (typeof window.WWebJS === 'undefined') return false;
-      try {
-        const collections = window.require('WAWebCollections');
-        return Boolean(collections?.Chat?.getModelsArray);
-      } catch {
-        return false;
-      }
-    });
+    return await withTimeout(
+      instance.pupPage.evaluate(() => {
+        if (typeof window.WWebJS === 'undefined') return false;
+        try {
+          const collections = window.require('WAWebCollections');
+          return Boolean(collections?.Chat?.getModelsArray);
+        } catch {
+          return false;
+        }
+      }),
+      STATE_CHECK_TIMEOUT_MS,
+      'Ready probe'
+    );
   } catch {
-    return false;
+    // If Connected on phone but Store is still warming, still treat as ready enough for UI
+    return connectionState === 'authenticated' || connectionState === 'ready';
   }
 }
 
@@ -224,6 +277,7 @@ async function tryFinalizeReady(instance) {
   connectingSince = 0;
   lastQr = null;
   lastQrDataUrl = null;
+  readyMisses = 0;
   connectedInfo = await readConnectedInfo(instance);
   markAuthenticated(connectedInfo);
   stopReadyCheck();
@@ -239,7 +293,7 @@ async function tryFinalizeReady(instance) {
 function startReadyCheck(instance) {
   stopReadyCheck();
   let attempts = 0;
-  const maxAttempts = 180;
+  const maxAttempts = 240;
 
   const check = async () => {
     if (!instance || connectionState === 'ready' || connectionState === 'disconnected') {
@@ -248,16 +302,31 @@ function startReadyCheck(instance) {
     }
 
     attempts++;
-    await tryFinalizeReady(instance);
+    try {
+      await tryFinalizeReady(instance);
+    } catch (err) {
+      console.warn('Ready check error:', err.message);
+    }
 
     if (attempts >= maxAttempts) {
       stopReadyCheck();
-      console.warn('Ready check timed out after scan — still syncing');
+      // Last resort: if WhatsApp already authenticated on phone, surface Connected
+      if (connectionState === 'authenticated' && hasSavedSession()) {
+        connectionState = 'ready';
+        connectingSince = 0;
+        connectedInfo = connectedInfo || { pushname: 'Connected' };
+        markAuthenticated(connectedInfo);
+        startKeepalive(instance);
+        emit('ready', connectedInfo);
+        console.warn('Ready check timed out — marking connected after authenticated session');
+      } else {
+        console.warn('Ready check timed out after scan — still syncing');
+      }
     }
   };
 
   check();
-  readyCheckTimer = setInterval(check, 1000);
+  readyCheckTimer = setInterval(check, 1500);
 }
 
 function formatChat(chat) {
@@ -803,12 +872,20 @@ function getStatus() {
 
 async function refreshStatus() {
   if (client && connectionState !== 'ready' && connectionState !== 'disconnected') {
-    await tryFinalizeReady(client);
+    await tryFinalizeReady(client).catch(() => {});
   } else if (client && connectionState === 'ready') {
+    // Don't demote to "connecting" on a single flaky getState — require several misses
     const connected = await isSessionConnected(client);
-    if (!connected) {
-      connectionState = 'authenticated';
-      await tryFinalizeReady(client);
+    if (connected) {
+      readyMisses = 0;
+    } else {
+      readyMisses += 1;
+      if (readyMisses >= 3) {
+        console.warn('WhatsApp ready probe missed 3 times — re-checking authenticated state');
+        connectionState = 'authenticated';
+        startReadyCheck(client);
+        await tryFinalizeReady(client).catch(() => {});
+      }
     }
   }
   return getStatus();
@@ -902,7 +979,7 @@ function createClient() {
     puppeteer: {
       headless: true,
       executablePath: chromePath,
-      protocolTimeout: 60000,
+      protocolTimeout: 180000,
       args: PUPPETEER_ARGS,
     },
   });
@@ -918,8 +995,10 @@ function createClient() {
         scale: 5,
       });
       emit('qr', lastQrDataUrl);
-      if (hasSavedSession()) {
-        console.warn('QR requested even though session files exist — scan once to refresh login');
+      // Session files may exist but WhatsApp still wants a fresh scan
+      if (fs.existsSync(AUTH_MARKER_PATH)) {
+        console.warn('QR requested — previous login expired, scan once to refresh');
+        clearAuthMarker();
       }
     } catch (err) {
       console.error('QR handler error:', err.message);
@@ -933,12 +1012,15 @@ function createClient() {
     markAuthenticated();
     startReadyCheck(instance);
     instance.sendPresenceAvailable().catch(() => {});
+    // Don't wait only for the ready event — cloud Chromium often skips it
+    setTimeout(() => tryFinalizeReady(instance).catch(() => {}), 1000);
+    setTimeout(() => tryFinalizeReady(instance).catch(() => {}), 5000);
     console.log('WhatsApp authenticated — session saved under', SESSION_PATH);
   });
 
   instance.on('loading_screen', (percent) => {
-    if (percent >= 99) {
-      setTimeout(() => tryFinalizeReady(instance), 1500);
+    if (percent >= 80) {
+      setTimeout(() => tryFinalizeReady(instance).catch(() => {}), 500);
     }
   });
 
@@ -1045,10 +1127,23 @@ async function initialize({ force = false, resetSession = false } = {}) {
       setTimeout(() => {
         if (client) tryFinalizeReady(client).catch(() => {});
       }, 2000);
+      setTimeout(() => {
+        if (client) tryFinalizeReady(client).catch(() => {});
+      }, 8000);
       return;
     } catch (err) {
       lastError = err;
       console.error(`WhatsApp init attempt ${attempt}/2 failed:`, err.message);
+
+      // Auth may have succeeded before puppeteer timed out — don't throw away the link
+      if (connectionState === 'ready') return;
+      if (connectionState === 'authenticated' && client) {
+        console.warn('Init timed out after authenticate — keeping session and waiting for ready');
+        startReadyCheck(client);
+        tryFinalizeReady(client).catch(() => {});
+        return;
+      }
+
       if (client) {
         await disconnect({ preserveState: true });
       }
@@ -1061,9 +1156,15 @@ async function initialize({ force = false, resetSession = false } = {}) {
     }
   }
 
-  connectionState = 'disconnected';
+  if (connectionState === 'ready' || connectionState === 'authenticated') {
+    return;
+  }
+
+  connectionState = hasSavedSession() ? 'authenticated' : 'disconnected';
   connectingSince = 0;
-  client = null;
+  if (connectionState !== 'authenticated') {
+    client = null;
+  }
 
   const message = isDetachedFrameError(lastError)
     ? 'Browser connection failed. Tap Connect again — it will retry automatically.'
@@ -1267,34 +1368,54 @@ function startConnection({ force = false, resetSession = false } = {}) {
     resetSession = false;
   }
 
+  // Already authenticated with a live browser — never restart Chromium just to "force".
+  // Restarting is what left the UI stuck on Connecting while WhatsApp stayed linked.
+  if (client && connectionState === 'authenticated') {
+    startReadyCheck(client);
+    tryFinalizeReady(client).catch(() => {});
+    return;
+  }
+
+  if (client && connectionState === 'qr' && lastQrDataUrl && !force) {
+    return;
+  }
+
+  const timeoutMs = hasSavedSession() ? RESTORE_TIMEOUT_MS : CONNECTING_TIMEOUT_MS;
   const connectingTimedOut =
     connectionState === 'connecting' &&
     connectingSince > 0 &&
-    Date.now() - connectingSince > CONNECTING_TIMEOUT_MS;
+    Date.now() - connectingSince > timeoutMs;
 
   // Session restore can take longer than a fresh QR; don't thrash the browser.
-  const restoreGraceMs = hasSavedSession() ? 90000 : QR_TARGET_MS;
+  const restoreGraceMs = hasSavedSession() ? RESTORE_TIMEOUT_MS : QR_TARGET_MS;
   const stuckWithoutQr =
     connectionState === 'connecting' &&
     connectingSince > 0 &&
     Date.now() - connectingSince > restoreGraceMs &&
-    !lastQrDataUrl;
+    !lastQrDataUrl &&
+    !client;
 
-  const shouldForce = force || connectingTimedOut || stuckWithoutQr;
+  const shouldForce = (force || connectingTimedOut || stuckWithoutQr) && !(client && connectionState === 'authenticated');
 
   if (initInProgress && !shouldForce) return;
   if (connectionState === 'qr' && lastQrDataUrl && !shouldForce) return;
 
   initInProgress = true;
-  connectionState = 'connecting';
-  connectingSince = Date.now();
+  if (connectionState !== 'authenticated') {
+    connectionState = 'connecting';
+    connectingSince = Date.now();
+  }
 
   initialize({ force: shouldForce, resetSession: false })
     .catch((err) => {
       console.error('WhatsApp connection failed:', err.message);
-      if (connectionState === 'connecting' || connectionState === 'authenticated') {
-        connectionState = 'disconnected';
+      // Keep authenticated state if we already linked — UI can still recover
+      if (connectionState === 'connecting') {
+        connectionState = hasSavedSession() ? 'authenticated' : 'disconnected';
         connectingSince = 0;
+        if (connectionState === 'authenticated' && client) {
+          startReadyCheck(client);
+        }
       }
     })
     .finally(() => {
