@@ -14,6 +14,7 @@ const CHROME_CANDIDATES = [
 
 const SESSION_PATH = path.join(__dirname, '..', 'data', 'whatsapp-session');
 const WEB_CACHE_PATH = path.join(__dirname, '..', 'data', 'wwebjs_cache');
+const AUTH_MARKER_PATH = path.join(SESSION_PATH, '.authenticated');
 const PINNED_WEB_VERSION = '2.3000.1017054665';
 
 const PUPPETEER_ARGS = [
@@ -28,13 +29,17 @@ const PUPPETEER_ARGS = [
   '--disable-translate',
   '--mute-audio',
   '--disable-component-update',
-  '--disable-features=IsolateOrigins,site-per-process,MemorySaverMode',
+  '--disable-features=IsolateOrigins,site-per-process,MemorySaverMode,TranslateUI',
   '--disable-site-isolation-trials',
   '--memory-pressure-off',
   '--disable-background-timer-throttling',
   '--disable-renderer-backgrounding',
   '--disable-backgrounding-occluded-windows',
   '--no-zygote',
+  // Helps WhatsApp Web start on low-RAM Render instances
+  '--renderer-process-limit=2',
+  '--js-flags=--max-old-space-size=256',
+  '--font-render-hinting=none',
 ];
 
 function isDetachedFrameError(err) {
@@ -220,6 +225,7 @@ async function tryFinalizeReady(instance) {
   lastQr = null;
   lastQrDataUrl = null;
   connectedInfo = await readConnectedInfo(instance);
+  markAuthenticated(connectedInfo);
   stopReadyCheck();
   startKeepalive(instance);
   emit('ready', connectedInfo);
@@ -784,11 +790,14 @@ function emit(event, data) {
 }
 
 function getStatus() {
+  const saved = hasSavedSession();
   return {
     state: connectionState,
     qr: lastQrDataUrl,
     connectedInfo,
-    hasSession: hasSavedSession(),
+    hasSession: saved,
+    // True only while restoring a real saved login (not while waiting for first QR)
+    restoring: saved && (connectionState === 'connecting' || connectionState === 'authenticated') && !lastQrDataUrl,
   };
 }
 
@@ -806,9 +815,38 @@ async function refreshStatus() {
 }
 
 function clearSessionData() {
+  clearAuthMarker();
   if (fs.existsSync(SESSION_PATH)) {
     fs.rmSync(SESSION_PATH, { recursive: true, force: true });
     console.log('WhatsApp session cleared from disk');
+  }
+}
+
+function markAuthenticated(info = {}) {
+  try {
+    ensureSessionDirs();
+    fs.writeFileSync(
+      AUTH_MARKER_PATH,
+      JSON.stringify(
+        {
+          authenticatedAt: new Date().toISOString(),
+          pushname: info.pushname || null,
+          phone: info.phone || null,
+        },
+        null,
+        2
+      )
+    );
+  } catch (err) {
+    console.error('Failed to write auth marker:', err.message);
+  }
+}
+
+function clearAuthMarker() {
+  try {
+    if (fs.existsSync(AUTH_MARKER_PATH)) fs.rmSync(AUTH_MARKER_PATH, { force: true });
+  } catch {
+    // ignore
   }
 }
 
@@ -892,6 +930,7 @@ function createClient() {
     connectionState = 'authenticated';
     lastQr = null;
     lastQrDataUrl = null;
+    markAuthenticated();
     startReadyCheck(instance);
     instance.sendPresenceAvailable().catch(() => {});
     console.log('WhatsApp authenticated — session saved under', SESSION_PATH);
@@ -921,6 +960,7 @@ function createClient() {
       connectedInfo = { pushname: 'Connected' };
     }
 
+    markAuthenticated(connectedInfo);
     startKeepalive(instance);
     emit('ready', connectedInfo);
     fetchAndCacheChats({ refresh: false, includeContacts: false }).catch((err) => {
@@ -1264,18 +1304,37 @@ function startConnection({ force = false, resetSession = false } = {}) {
 
 function hasSavedSession() {
   try {
-    const profileDir = path.join(SESSION_PATH, 'session');
-    if (!fs.existsSync(profileDir)) {
-      // Fall back: any files under SESSION_PATH count as a saved login
-      return fs.existsSync(SESSION_PATH) && fs.readdirSync(SESSION_PATH).length > 0;
-    }
+    // Only count a real login. Creating a Chrome profile while waiting for QR
+    // must NOT look like a saved session (that was breaking Render UI).
+    if (fs.existsSync(AUTH_MARKER_PATH)) return true;
 
-    // Chrome/WhatsApp auth lives under Default/ or similar profile folders
-    const entries = fs.readdirSync(profileDir);
-    return entries.some((name) => {
-      if (name.startsWith('Singleton')) return false;
-      return true;
-    });
+    // Migration fallback for sessions linked before the marker existed.
+    const waIdb = path.join(
+      SESSION_PATH,
+      'session',
+      'Default',
+      'IndexedDB',
+      'https_web.whatsapp.com_0.indexeddb.leveldb'
+    );
+    const localStorage = path.join(
+      SESSION_PATH,
+      'session',
+      'Default',
+      'Local Storage',
+      'leveldb'
+    );
+    if (!fs.existsSync(waIdb) || !fs.existsSync(localStorage)) return false;
+
+    // Fresh QR-only profiles are tiny; linked sessions keep more WA state.
+    let total = 0;
+    for (const file of fs.readdirSync(waIdb)) {
+      try {
+        total += fs.statSync(path.join(waIdb, file)).size;
+      } catch {
+        // ignore
+      }
+    }
+    return total > 50_000;
   } catch {
     return false;
   }

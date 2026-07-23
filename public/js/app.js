@@ -235,7 +235,7 @@ function openQrOverlay() {
   }
 }
 
-function updateConnectionUI({ state: connState, qr, connectedInfo, hasSession }) {
+function updateConnectionUI({ state: connState, qr, connectedInfo, hasSession, restoring }) {
   const wasReady = state.connectionState === 'ready';
   state.connectionState = connState;
   els.statusDot.className = `status-dot ${connState}`;
@@ -249,7 +249,7 @@ function updateConnectionUI({ state: connState, qr, connectedInfo, hasSession })
     auth_failure: 'Auth failed',
   };
 
-  if ((connState === 'connecting' || connState === 'authenticated') && hasSession && !qr) {
+  if (restoring) {
     els.statusText.textContent = 'Restoring saved login...';
   } else {
     els.statusText.textContent = labels[connState] || connState;
@@ -263,8 +263,8 @@ function updateConnectionUI({ state: connState, qr, connectedInfo, hasSession })
     hideQrOverlay();
     if (!wasReady) showToast('WhatsApp connected!');
   } else if (connState === 'connecting' || connState === 'authenticated') {
-    // Restoring a saved session does not need a QR overlay
-    if (hasSession && !qr) {
+    // Only skip QR UI when truly restoring an existing login
+    if (restoring) {
       hideQrOverlay();
     } else if (!state.qrDismissed) {
       if (connState === 'connecting' && !qr && !lastQrUrl) {
@@ -379,8 +379,10 @@ async function connect() {
     updateConnectionUI(connectData);
     if (connectData.qr) {
       showToast('Scan the QR code');
-    } else if (connectData.hasSession || connectData.state === 'connecting' || connectData.state === 'authenticated') {
+    } else if (connectData.restoring) {
       showToast('Restoring saved WhatsApp login...');
+    } else {
+      showToast('Starting WhatsApp — QR will appear shortly');
     }
   } catch (err) {
     showToast(err.message || 'Could not reach server', 'error');

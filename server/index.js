@@ -45,6 +45,11 @@ app.get('/api/download', (_req, res) => {
   res.json({ available: true, url: '/download/apk' });
 });
 
+app.get('/api/health', (_req, res) => {
+  // Lightweight probe for Render — do not start Chromium here
+  res.json({ ok: true });
+});
+
 app.get('/api/status', async (_req, res) => {
   whatsapp.warmupConnection();
   try {
@@ -68,14 +73,14 @@ app.post('/api/connect', async (req, res) => {
     }
     whatsapp.startConnection({ force, resetSession: false });
     const status = await whatsapp.refreshStatus();
-    const hasSession = whatsapp.hasSavedSession();
     res.json({
       ok: true,
-      message: hasSession
+      message: status.restoring
         ? 'Restoring saved WhatsApp login'
-        : 'Connecting — scan the QR code',
+        : status.qr
+          ? 'Scan the QR code'
+          : 'Connecting — QR will appear shortly',
       ...status,
-      hasSession,
     });
   } catch (err) {
     console.error('POST /api/connect error:', err.message);
@@ -225,6 +230,11 @@ app.listen(PORT, HOST, async () => {
 
   // Restore WhatsApp login from persistent disk after deploy/restart
   try {
+    const dataDir = path.join(__dirname, '..', 'data');
+    fs.mkdirSync(dataDir, { recursive: true });
+    fs.accessSync(dataDir, fs.constants.W_OK);
+    console.log('Data directory writable:', dataDir);
+
     if (whatsapp.hasSavedSession()) {
       console.log('Found saved WhatsApp session — restoring automatically');
       whatsapp.warmupConnection();
@@ -232,6 +242,6 @@ app.listen(PORT, HOST, async () => {
       console.log('No saved WhatsApp session — scan QR once to link permanently');
     }
   } catch (err) {
-    console.error('WhatsApp session restore failed to start:', err.message);
+    console.error('WhatsApp session restore / data dir check failed:', err.message);
   }
 });

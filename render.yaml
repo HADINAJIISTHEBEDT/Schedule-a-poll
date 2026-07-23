@@ -7,7 +7,7 @@ services:
     rootDir: .
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    healthCheckPath: /api/status
+    healthCheckPath: /api/health
     disk:
       name: poll-data
       mountPath: /app/data
@@ -23,3 +23,5 @@ services:
         value: /usr/bin/chromium
       - key: PUPPETEER_SKIP_CHROMIUM_DOWNLOAD
         value: "true"
+      - key: HOST
+        value: "0.0.0.0"

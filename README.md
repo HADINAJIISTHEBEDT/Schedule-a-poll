@@ -152,7 +152,7 @@ If you created a **Node** service by mistake, delete it and redeploy with **Dock
 | Root Directory | *(blank — not `src`)* |
 | Branch | `main` |
 | Dockerfile Path | `./Dockerfile` |
-| Health Check | `/api/status` |
+| Health Check | `/api/health` |
 | Disk | Mount `/app/data` (1 GB) |
 
 ## Android APK
