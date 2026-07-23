@@ -276,11 +276,18 @@ function formatDirectChat(chat) {
 }
 
 function matchSearchTerm(name, id, term) {
-  const label = String(name || '').toLowerCase();
-  const idPart = String(id || '').split('@')[0].toLowerCase();
+  const normalize = (value) =>
+    String(value || '')
+      .toLowerCase()
+      .normalize('NFKD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .trim();
+  const needle = normalize(term);
+  const label = normalize(name);
+  const idPart = String(id || '').split('@')[0];
   const digits = idPart.replace(/\D/g, '');
   const termDigits = String(term || '').replace(/\D/g, '');
-  if (label.includes(term) || idPart.includes(term)) return true;
+  if (label.includes(needle) || normalize(idPart).includes(needle)) return true;
   if (termDigits.length >= 3 && digits.includes(termDigits)) return true;
   return false;
 }
@@ -321,27 +328,44 @@ async function fetchChatsDirect({ includeContacts = false } = {}) {
     };
 
     const contactName = (contact, id) => {
+      const names = [];
+      const push = (value) => {
+        if (value == null) return;
+        const text = String(value).trim();
+        if (text) names.push(text);
+      };
+
       try {
-        const getters = window.require('WAWebContactGetters');
-        const fromGetter =
-          getters.getName?.(contact) ||
-          getters.getPushname?.(contact) ||
-          getters.getShortName?.(contact) ||
-          getters.getVerifiedName?.(contact);
-        if (fromGetter) return fromGetter;
+        const frontend = window.require('WAWebFrontendContactGetters');
+        push(frontend.getDisplayName?.(contact));
+        push(frontend.getSearchName?.(contact));
+        push(frontend.getFormattedName?.(contact));
+        push(frontend.getFormattedShortName?.(contact));
       } catch {
-        // fall through
+        // optional
       }
 
-      return (
-        contact.name ||
-        contact.pushname ||
-        contact.shortName ||
-        contact.verifiedName ||
-        contact.formattedName ||
-        (id && id.includes('@') ? id.split('@')[0] : id) ||
-        'Unknown'
-      );
+      try {
+        const getters = window.require('WAWebContactGetters');
+        push(getters.getName?.(contact));
+        push(getters.getPushname?.(contact));
+        push(getters.getShortName?.(contact));
+        push(getters.getVerifiedName?.(contact));
+      } catch {
+        // optional
+      }
+
+      const keys = ['name', 'pushname', 'shortName', 'verifiedName', 'notifyName', 'displayName', 'searchName', 'formattedName'];
+      for (const key of keys) {
+        push(contact[key]);
+        try {
+          if (typeof contact.get === 'function') push(contact.get(key));
+        } catch {
+          // ignore
+        }
+      }
+
+      return names[0] || (id && id.includes('@') ? id.split('@')[0] : id) || 'Unknown';
     };
 
     const isMeContact = (contact) => {
@@ -416,11 +440,32 @@ async function searchChatsDirect(term, filter = 'all', includeContacts = true) {
           throw new Error('WhatsApp collections not ready');
         }
 
+        let contactGetters = null;
+        let frontendGetters = null;
+        try {
+          contactGetters = window.require('WAWebContactGetters');
+        } catch {
+          // optional
+        }
+        try {
+          frontendGetters = window.require('WAWebFrontendContactGetters');
+        } catch {
+          // optional
+        }
+
         const seen = new Set();
         const results = [];
-        const needle = String(searchTerm || '').toLowerCase();
+        const rawNeedle = String(searchTerm || '');
+        const needle = rawNeedle.toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '');
         const needleDigits = needle.replace(/\D/g, '');
         const limit = 50;
+
+        const normalize = (value) =>
+          String(value || '')
+            .toLowerCase()
+            .normalize('NFKD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .trim();
 
         const toId = (value) => {
           if (!value) return null;
@@ -442,53 +487,123 @@ async function searchChatsDirect(term, filter = 'all', includeContacts = true) {
               const resolved = toId(phone);
               if (resolved) return resolved;
             } catch {
-              // fall through — keep lid id as last resort
+              // keep lid id
             }
           }
 
           return rawId;
         };
 
-        const contactName = (contact, id) => {
-          try {
-            const getters = window.require('WAWebContactGetters');
-            const fromGetter =
-              getters.getName?.(contact) ||
-              getters.getPushname?.(contact) ||
-              getters.getShortName?.(contact) ||
-              getters.getVerifiedName?.(contact);
-            if (fromGetter) return fromGetter;
-          } catch {
-            // fall through
+        const collectNames = (contact) => {
+          const names = [];
+          const push = (value) => {
+            if (value == null) return;
+            const text = String(value).trim();
+            if (text) names.push(text);
+          };
+
+          if (frontendGetters) {
+            try {
+              push(frontendGetters.getDisplayName?.(contact));
+              push(frontendGetters.getSearchName?.(contact));
+              push(frontendGetters.getFormattedName?.(contact));
+              push(frontendGetters.getFormattedShortName?.(contact));
+              push(frontendGetters.getDisplayNameOrPnForLid?.(contact));
+              push(frontendGetters.getMentionName?.(contact));
+            } catch {
+              // ignore
+            }
           }
 
-          return (
-            contact.name ||
-            contact.pushname ||
-            contact.shortName ||
-            contact.verifiedName ||
-            contact.formattedName ||
-            (id && id.includes('@') ? id.split('@')[0] : id) ||
-            'Unknown'
-          );
+          if (contactGetters) {
+            try {
+              push(contactGetters.getName?.(contact));
+              push(contactGetters.getPushname?.(contact));
+              push(contactGetters.getShortName?.(contact));
+              push(contactGetters.getVerifiedName?.(contact));
+              push(contactGetters.getNotifyName?.(contact));
+            } catch {
+              // ignore
+            }
+          }
+
+          const attrKeys = [
+            'name',
+            'pushname',
+            'shortName',
+            'verifiedName',
+            'notifyName',
+            'displayName',
+            'searchName',
+            'formattedName',
+            'displayNameOrPnForLid',
+          ];
+          for (const key of attrKeys) {
+            push(contact[key]);
+            try {
+              if (typeof contact.get === 'function') push(contact.get(key));
+            } catch {
+              // ignore
+            }
+          }
+
+          try {
+            const serialized = contact.serialize?.();
+            if (serialized) {
+              for (const key of attrKeys) push(serialized[key]);
+            }
+          } catch {
+            // ignore
+          }
+
+          return names;
+        };
+
+        const bestContactName = (contact, id) => {
+          const names = collectNames(contact);
+          return names[0] || (id && id.includes('@') ? id.split('@')[0] : id) || 'Unknown';
         };
 
         const isMeContact = (contact) => {
           if (contact.isMe) return true;
           try {
-            return Boolean(window.require('WAWebContactGetters').getIsMe?.(contact));
+            return Boolean(contactGetters?.getIsMe?.(contact));
           } catch {
             return false;
           }
         };
 
-        const matches = (name, id) => {
-          const label = String(name || '').toLowerCase();
-          const idPart = String(id || '').split('@')[0].toLowerCase();
+        const isGroupContact = (contact) => {
+          try {
+            if (contactGetters?.getIsGroup?.(contact)) return true;
+          } catch {
+            // ignore
+          }
+          return Boolean(contact.isGroup);
+        };
+
+        const textMatches = (values, id) => {
+          for (const value of values) {
+            if (normalize(value).includes(needle)) return true;
+          }
+          const idPart = String(id || '').split('@')[0];
+          if (normalize(idPart).includes(needle)) return true;
           const digits = idPart.replace(/\D/g, '');
-          if (label.includes(needle) || idPart.includes(needle)) return true;
           if (needleDigits.length >= 3 && digits.includes(needleDigits)) return true;
           return false;
+        };
+
+        const contactMatches = (contact, names, id) => {
+          // Native WhatsApp matcher (same as in-app search)
+          try {
+            if (typeof contact.searchMatch === 'function') {
+              const hit = contact.searchMatch(rawNeedle) || contact.searchMatch(needle);
+              if (hit) return true;
+            }
+          } catch {
+            // ignore and fall back
+          }
+          return textMatches(names, id);
         };
 
         const tryAdd = (id, name, isGroup) => {
@@ -498,7 +613,6 @@ async function searchChatsDirect(term, filter = 'all', includeContacts = true) {
           if (id.endsWith('@broadcast') || id === 'status@broadcast') return false;
           if (chatFilter === 'groups' && !isGroup) return false;
           if (chatFilter === 'contacts' && isGroup) return false;
-          if (!matches(name, id)) return false;
           seen.add(id);
           results.push({ id, name: name || 'Unknown', isGroup: Boolean(isGroup) });
           return true;
@@ -512,30 +626,48 @@ async function searchChatsDirect(term, filter = 'all', includeContacts = true) {
           const contacts = collections.Contact?.getModelsArray?.() || [];
           for (const contact of contacts) {
             if (results.length >= limit) break;
-            if (isMeContact(contact)) continue;
+            if (isMeContact(contact) || isGroupContact(contact)) continue;
             const id = contactId(contact);
             if (!id || id.endsWith('@g.us')) continue;
-            tryAdd(id, contactName(contact, id), false);
+            const names = collectNames(contact);
+            if (!contactMatches(contact, names, id)) continue;
+            tryAdd(id, names[0] || bestContactName(contact, id), false);
           }
         }
 
-        if (chatFilter !== 'contacts') {
+        // Always search chats too — Contacts filter previously skipped this,
+        // so people you already chat with never appeared by their chat title.
+        {
           const chats = collections.Chat?.getModelsArray?.() || [];
           for (const chat of chats) {
             if (results.length >= limit) break;
             const id = toId(chat.id);
             if (!id) continue;
-            const name =
-              chat.formattedTitle ||
-              chat.name ||
-              chat.contact?.pushname ||
-              chat.contact?.name ||
-              (id.includes('@') ? id.split('@')[0] : id) ||
-              'Unknown';
             const isGroup = Boolean(chat.groupMetadata) || id.endsWith('@g.us');
+            if (chatFilter === 'groups' && !isGroup) continue;
+            if (chatFilter === 'contacts' && isGroup) continue;
             const isReadOnly = Boolean(chat.groupMetadata?.announce);
             if (isReadOnly) continue;
-            tryAdd(id, name, isGroup);
+
+            const nameCandidates = [];
+            const push = (value) => {
+              if (value == null) return;
+              const text = String(value).trim();
+              if (text) nameCandidates.push(text);
+            };
+
+            push(chat.formattedTitle);
+            push(chat.name);
+            if (chat.contact) {
+              for (const n of collectNames(chat.contact)) push(n);
+            }
+
+            if (!textMatches(nameCandidates, id)) continue;
+            tryAdd(
+              id,
+              nameCandidates[0] || (id.includes('@') ? id.split('@')[0] : id) || 'Unknown',
+              isGroup
+            );
           }
         }
 
