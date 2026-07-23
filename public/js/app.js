@@ -441,9 +441,9 @@ async function searchChats(query) {
       state.searchResults = [];
       const message = err.message || 'Search failed';
       showToast(
-        /502|failed|timed out/i.test(message)
+        /502|504|timed out|not ready|collections/i.test(message)
           ? 'Search failed — wait a moment and try again'
-          : message.includes('JSON')
+          : /JSON|Invalid response|Request failed/i.test(message)
             ? 'Search failed — try again in a few seconds'
             : message,
         'error'

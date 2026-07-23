@@ -275,6 +275,16 @@ function formatDirectChat(chat) {
   };
 }
 
+function matchSearchTerm(name, id, term) {
+  const label = String(name || '').toLowerCase();
+  const idPart = String(id || '').split('@')[0].toLowerCase();
+  const digits = idPart.replace(/\D/g, '');
+  const termDigits = String(term || '').replace(/\D/g, '');
+  if (label.includes(term) || idPart.includes(term)) return true;
+  if (termDigits.length >= 3 && digits.includes(termDigits)) return true;
+  return false;
+}
+
 async function fetchChatsDirect({ includeContacts = false } = {}) {
   const result = await client.pupPage.evaluate((withContacts) => {
     const collections = window.require('WAWebCollections');
@@ -282,14 +292,77 @@ async function fetchChatsDirect({ includeContacts = false } = {}) {
     const seen = new Set();
     const items = [];
 
+    const toId = (value) => {
+      if (!value) return null;
+      if (typeof value === 'string') return value;
+      if (value._serialized) return value._serialized;
+      if (value.user && value.server) return `${value.user}@${value.server}`;
+      return null;
+    };
+
+    const contactId = (contact) => {
+      // Prefer phone number over LID so polls can be sent reliably
+      const phoneId = toId(contact.phoneNumber);
+      if (phoneId) return phoneId;
+
+      const rawId = toId(contact.id);
+      if (rawId && rawId.endsWith('@lid')) {
+        try {
+          const wid = window.require('WAWebWidFactory').createWidFromWidLike(contact.id);
+          const phone = window.require('WAWebApiContact').getPhoneNumber(wid);
+          const resolved = toId(phone);
+          if (resolved) return resolved;
+        } catch {
+          // fall through — keep lid id as last resort
+        }
+      }
+
+      return rawId;
+    };
+
+    const contactName = (contact, id) => {
+      try {
+        const getters = window.require('WAWebContactGetters');
+        const fromGetter =
+          getters.getName?.(contact) ||
+          getters.getPushname?.(contact) ||
+          getters.getShortName?.(contact) ||
+          getters.getVerifiedName?.(contact);
+        if (fromGetter) return fromGetter;
+      } catch {
+        // fall through
+      }
+
+      return (
+        contact.name ||
+        contact.pushname ||
+        contact.shortName ||
+        contact.verifiedName ||
+        contact.formattedName ||
+        (id && id.includes('@') ? id.split('@')[0] : id) ||
+        'Unknown'
+      );
+    };
+
+    const isMeContact = (contact) => {
+      if (contact.isMe) return true;
+      try {
+        return Boolean(window.require('WAWebContactGetters').getIsMe?.(contact));
+      } catch {
+        return false;
+      }
+    };
+
     const addItem = (id, name, isGroup, isReadOnly) => {
-      if (!id || seen.has(id) || isReadOnly) return;
+      if (!id || typeof id !== 'string' || seen.has(id) || isReadOnly) return;
+      if (id.endsWith('@broadcast') || id === 'status@broadcast') return;
       seen.add(id);
-      items.push({ id, name, isGroup });
+      items.push({ id, name: name || 'Unknown', isGroup: Boolean(isGroup) });
     };
 
     for (const chat of chats) {
-      const id = chat.id?._serialized || String(chat.id);
+      const id = toId(chat.id);
+      if (!id) continue;
       const name =
         chat.formattedTitle ||
         chat.name ||
@@ -306,17 +379,10 @@ async function fetchChatsDirect({ includeContacts = false } = {}) {
     if (withContacts) {
       const contacts = collections.Contact?.getModelsArray?.() || [];
       for (const contact of contacts) {
-        const id = contact.id?._serialized || String(contact.id);
-        if (!id || id.endsWith('@g.us') || contact.isMe) continue;
-
-        const name =
-          contact.pushname ||
-          contact.name ||
-          contact.shortName ||
-          (id.includes('@') ? id.split('@')[0] : id) ||
-          'Unknown';
-
-        addItem(id, name, false, false);
+        if (isMeContact(contact)) continue;
+        const id = contactId(contact);
+        if (!id || id.endsWith('@g.us')) continue;
+        addItem(id, contactName(contact, id), false, false);
       }
     }
 
@@ -342,59 +408,123 @@ async function searchChatsDirect(term, filter = 'all', includeContacts = true) {
 
   return withTimeout(
     client.pupPage.evaluate(
-      async (searchTerm, chatFilter, withContacts) => {
-        const collections = window.require('WAWebCollections');
+      (searchTerm, chatFilter, withContacts) => {
+        let collections;
+        try {
+          collections = window.require('WAWebCollections');
+        } catch (err) {
+          throw new Error('WhatsApp collections not ready');
+        }
+
         const seen = new Set();
         const results = [];
-        const needle = searchTerm.toLowerCase();
+        const needle = String(searchTerm || '').toLowerCase();
+        const needleDigits = needle.replace(/\D/g, '');
         const limit = 50;
 
+        const toId = (value) => {
+          if (!value) return null;
+          if (typeof value === 'string') return value;
+          if (value._serialized) return value._serialized;
+          if (value.user && value.server) return `${value.user}@${value.server}`;
+          return null;
+        };
+
+        const contactId = (contact) => {
+          const phoneId = toId(contact.phoneNumber);
+          if (phoneId) return phoneId;
+
+          const rawId = toId(contact.id);
+          if (rawId && rawId.endsWith('@lid')) {
+            try {
+              const wid = window.require('WAWebWidFactory').createWidFromWidLike(contact.id);
+              const phone = window.require('WAWebApiContact').getPhoneNumber(wid);
+              const resolved = toId(phone);
+              if (resolved) return resolved;
+            } catch {
+              // fall through — keep lid id as last resort
+            }
+          }
+
+          return rawId;
+        };
+
+        const contactName = (contact, id) => {
+          try {
+            const getters = window.require('WAWebContactGetters');
+            const fromGetter =
+              getters.getName?.(contact) ||
+              getters.getPushname?.(contact) ||
+              getters.getShortName?.(contact) ||
+              getters.getVerifiedName?.(contact);
+            if (fromGetter) return fromGetter;
+          } catch {
+            // fall through
+          }
+
+          return (
+            contact.name ||
+            contact.pushname ||
+            contact.shortName ||
+            contact.verifiedName ||
+            contact.formattedName ||
+            (id && id.includes('@') ? id.split('@')[0] : id) ||
+            'Unknown'
+          );
+        };
+
+        const isMeContact = (contact) => {
+          if (contact.isMe) return true;
+          try {
+            return Boolean(window.require('WAWebContactGetters').getIsMe?.(contact));
+          } catch {
+            return false;
+          }
+        };
+
         const matches = (name, id) => {
-          const label = (name || '').toLowerCase();
-          const phone = String(id || '').split('@')[0].toLowerCase();
-          return label.includes(needle) || phone.includes(needle);
+          const label = String(name || '').toLowerCase();
+          const idPart = String(id || '').split('@')[0].toLowerCase();
+          const digits = idPart.replace(/\D/g, '');
+          if (label.includes(needle) || idPart.includes(needle)) return true;
+          if (needleDigits.length >= 3 && digits.includes(needleDigits)) return true;
+          return false;
         };
 
         const tryAdd = (id, name, isGroup) => {
-          if (!id || seen.has(id) || results.length >= limit) return false;
+          if (!id || typeof id !== 'string' || seen.has(id) || results.length >= limit) {
+            return false;
+          }
+          if (id.endsWith('@broadcast') || id === 'status@broadcast') return false;
           if (chatFilter === 'groups' && !isGroup) return false;
           if (chatFilter === 'contacts' && isGroup) return false;
           if (!matches(name, id)) return false;
           seen.add(id);
-          results.push({ id, name: name || 'Unknown', isGroup });
+          results.push({ id, name: name || 'Unknown', isGroup: Boolean(isGroup) });
           return true;
         };
 
+        // Contacts first so people aren't crowded out by groups
         const searchContacts = withContacts && chatFilter !== 'groups';
         if (searchContacts) {
-          let contacts = collections.Contact?.getModelsArray?.() || [];
-          if (contacts.length === 0 && window.WWebJS?.getContacts) {
-            try {
-              contacts = await window.WWebJS.getContacts();
-            } catch {
-              contacts = [];
-            }
-          }
-
+          // Never call WWebJS.getContacts() here — it loads business profiles
+          // for every contact and routinely times out / 502s on Render.
+          const contacts = collections.Contact?.getModelsArray?.() || [];
           for (const contact of contacts) {
             if (results.length >= limit) break;
-            const id = contact.id?._serialized || contact.id || String(contact.id);
-            if (!id || id.endsWith('@g.us') || contact.isMe) continue;
-            const name =
-              contact.pushname ||
-              contact.name ||
-              contact.shortName ||
-              contact.formattedName ||
-              (id.includes('@') ? id.split('@')[0] : id) ||
-              'Unknown';
-            tryAdd(id, name, false);
+            if (isMeContact(contact)) continue;
+            const id = contactId(contact);
+            if (!id || id.endsWith('@g.us')) continue;
+            tryAdd(id, contactName(contact, id), false);
           }
         }
 
         if (chatFilter !== 'contacts') {
-          for (const chat of collections.Chat.getModelsArray()) {
+          const chats = collections.Chat?.getModelsArray?.() || [];
+          for (const chat of chats) {
             if (results.length >= limit) break;
-            const id = chat.id?._serialized || String(chat.id);
+            const id = toId(chat.id);
+            if (!id) continue;
             const name =
               chat.formattedTitle ||
               chat.name ||
@@ -450,7 +580,7 @@ function searchCachedChats(term, filter, includeContacts) {
   }
 
   return pool
-    .filter((c) => c.name.toLowerCase().includes(term))
+    .filter((c) => matchSearchTerm(c.name, c.id, term))
     .slice(0, 50);
 }
 
@@ -787,6 +917,11 @@ async function searchChats({ query = '', filter = 'all', includeContacts = true 
 
   const connected = await isSessionConnected(client);
   if (!connected) {
+    // Still allow cache search if WhatsApp briefly flaps — avoids hard fail toasts
+    const termEarly = query.trim().toLowerCase();
+    if (termEarly && cachedChats.length > 0) {
+      return searchCachedChats(termEarly, filter, includeContacts);
+    }
     throw new Error('WhatsApp is not connected');
   }
 
@@ -796,10 +931,18 @@ async function searchChats({ query = '', filter = 'all', includeContacts = true 
   }
 
   try {
-    return await searchChatsDirect(term, filter, includeContacts);
+    const live = await searchChatsDirect(term, filter, includeContacts);
+    if (live.length > 0) return live;
+
+    // Live search returned nothing — try cache (may have older chats)
+    if (cachedChats.length > 0) {
+      const cached = searchCachedChats(term, filter, includeContacts);
+      if (cached.length > 0) return cached;
+    }
+    return live;
   } catch (err) {
     console.error('Direct search failed:', err.message);
-    if (cachedChats.length > 0) {
+    if (cachedChats.length > 0 || (cachedContacts && cachedContacts.length > 0)) {
       return searchCachedChats(term, filter, includeContacts);
     }
     throw new Error(err.message || 'Search failed — try again in a few seconds');
