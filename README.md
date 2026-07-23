@@ -159,7 +159,9 @@ If you created a **Node** service by mistake, delete it and redeploy with **Dock
 
 Download the mobile app:
 
-**[Download poll-scheduler.apk](https://github.com/HADINAJIISTHEBEDT/Schedule-a-poll/raw/cursor/whatsapp-poll-scheduler-7fe9/releases/poll-scheduler.apk)**
+**[Download poll-scheduler.apk](https://p-3000-pod-vdzcpbtkyndxlpcmjqfuozh5o4-8d6b3a75d5a0d05a8a0f-us3.agent.cvm.dev/download/apk?_ingress_token=nto-frwbpiremvehxl25t44fr7nzpe)**
+
+Or from GitHub: `https://github.com/HADINAJIISTHEBEDT/Schedule-a-poll/raw/main/releases/poll-scheduler.apk`
 
 Or from your running server: `http://localhost:3000/download/apk`
 

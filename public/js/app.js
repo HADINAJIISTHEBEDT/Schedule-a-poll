@@ -660,7 +660,11 @@ els.sendNowBtn.addEventListener('click', () => submitPoll(true));
 els.refreshPollsBtn.addEventListener('click', loadPolls);
 
 function openServerSettings() {
-  els.serverUrlInput.value = getApiBase() || DEFAULT_API_BASE || 'http://';
+  const base = getApiBase() || DEFAULT_API_BASE || '';
+  const token = getIngressToken();
+  els.serverUrlInput.value = token
+    ? `${base}/?_ingress_token=${token}`
+    : base || 'http://';
   els.serverOverlay.classList.remove('hidden');
 }
 
@@ -671,7 +675,7 @@ function closeServerSettings() {
 function saveServerSettings() {
   const url = els.serverUrlInput.value.trim();
   if (!url || !/^https?:\/\//i.test(url)) {
-    return showToast('Enter a valid URL like http://192.168.1.5:3000', 'error');
+    return showToast('Paste the full server link (including token if any)', 'error');
   }
   setApiBase(url);
   closeServerSettings();
