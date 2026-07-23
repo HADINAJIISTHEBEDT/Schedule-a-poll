@@ -788,6 +788,7 @@ function getStatus() {
     state: connectionState,
     qr: lastQrDataUrl,
     connectedInfo,
+    hasSession: hasSavedSession(),
   };
 }
 
@@ -807,13 +808,25 @@ async function refreshStatus() {
 function clearSessionData() {
   if (fs.existsSync(SESSION_PATH)) {
     fs.rmSync(SESSION_PATH, { recursive: true, force: true });
+    console.log('WhatsApp session cleared from disk');
+  }
+}
+
+function ensureSessionDirs() {
+  try {
+    fs.mkdirSync(SESSION_PATH, { recursive: true });
+    fs.mkdirSync(WEB_CACHE_PATH, { recursive: true });
+  } catch (err) {
+    console.error('Failed to create session dirs:', err.message);
   }
 }
 
 function clearBrowserLocks() {
   const lockFiles = ['SingletonLock', 'SingletonSocket', 'SingletonCookie'];
+  // LocalAuth stores Chrome profile under data/whatsapp-session/session
+  const profileDir = path.join(SESSION_PATH, 'session');
   for (const file of lockFiles) {
-    const lockPath = path.join(SESSION_PATH, 'session', file);
+    const lockPath = path.join(profileDir, file);
     if (fs.existsSync(lockPath)) {
       try {
         fs.rmSync(lockPath, { force: true });
@@ -830,8 +843,11 @@ function createClient() {
     console.warn('No Chrome/Chromium binary found — Puppeteer will use its bundled browser');
   }
 
+  ensureSessionDirs();
+
   const instance = new Client({
     authStrategy: new LocalAuth({
+      // Keep default folder name "session" so existing Render disk logins keep working
       dataPath: SESSION_PATH,
     }),
     takeoverOnConflict: true,
@@ -864,6 +880,9 @@ function createClient() {
         scale: 5,
       });
       emit('qr', lastQrDataUrl);
+      if (hasSavedSession()) {
+        console.warn('QR requested even though session files exist — scan once to refresh login');
+      }
     } catch (err) {
       console.error('QR handler error:', err.message);
     }
@@ -875,6 +894,7 @@ function createClient() {
     lastQrDataUrl = null;
     startReadyCheck(instance);
     instance.sendPresenceAvailable().catch(() => {});
+    console.log('WhatsApp authenticated — session saved under', SESSION_PATH);
   });
 
   instance.on('loading_screen', (percent) => {
@@ -924,7 +944,15 @@ function createClient() {
     connectingSince = 0;
     resetWarmup();
     emit('disconnected', reason);
-    console.log('WhatsApp disconnected:', reason, '— session kept until manual disconnect');
+
+    // Only wipe disk if WhatsApp itself logged the device out.
+    // Deploys / restarts keep the session so one QR scan lasts.
+    if (String(reason).toUpperCase() === 'LOGOUT') {
+      console.warn('WhatsApp logged out remotely — clearing saved session');
+      clearSessionData();
+    } else {
+      console.log('WhatsApp disconnected:', reason, '— session kept until manual disconnect');
+    }
   });
 
   instance.on('auth_failure', (msg) => {
@@ -932,6 +960,7 @@ function createClient() {
     connectionState = 'auth_failure';
     connectingSince = 0;
     emit('auth_failure', msg);
+    console.error('WhatsApp auth_failure (session kept for retry):', msg);
   });
 
   return instance;
@@ -950,10 +979,14 @@ async function initialize({ force = false, resetSession = false } = {}) {
     if (connectionState === 'connecting') return;
   }
 
+  // Only wipe session when explicitly requested (Disconnect). Never on deploy/retry.
   if (resetSession) {
     clearSessionData();
-  } else if (client) {
+  } else {
     clearBrowserLocks();
+    if (hasSavedSession()) {
+      console.log('Restoring WhatsApp login from', SESSION_PATH);
+    }
   }
 
   connectionState = 'connecting';
@@ -1188,18 +1221,26 @@ function isReady() {
 function startConnection({ force = false, resetSession = false } = {}) {
   if (isReady()) return;
 
+  // Connect/retry must never wipe a saved login. Only Disconnect may reset.
+  if (resetSession) {
+    console.warn('Ignoring resetSession on connect — use Disconnect to clear login');
+    resetSession = false;
+  }
+
   const connectingTimedOut =
     connectionState === 'connecting' &&
     connectingSince > 0 &&
     Date.now() - connectingSince > CONNECTING_TIMEOUT_MS;
 
+  // Session restore can take longer than a fresh QR; don't thrash the browser.
+  const restoreGraceMs = hasSavedSession() ? 90000 : QR_TARGET_MS;
   const stuckWithoutQr =
     connectionState === 'connecting' &&
     connectingSince > 0 &&
-    Date.now() - connectingSince > QR_TARGET_MS &&
+    Date.now() - connectingSince > restoreGraceMs &&
     !lastQrDataUrl;
 
-  const shouldForce = force || resetSession || connectingTimedOut || stuckWithoutQr;
+  const shouldForce = force || connectingTimedOut || stuckWithoutQr;
 
   if (initInProgress && !shouldForce) return;
   if (connectionState === 'qr' && lastQrDataUrl && !shouldForce) return;
@@ -1208,7 +1249,7 @@ function startConnection({ force = false, resetSession = false } = {}) {
   connectionState = 'connecting';
   connectingSince = Date.now();
 
-  initialize({ force: shouldForce, resetSession })
+  initialize({ force: shouldForce, resetSession: false })
     .catch((err) => {
       console.error('WhatsApp connection failed:', err.message);
       if (connectionState === 'connecting' || connectionState === 'authenticated') {
@@ -1223,7 +1264,18 @@ function startConnection({ force = false, resetSession = false } = {}) {
 
 function hasSavedSession() {
   try {
-    return fs.existsSync(SESSION_PATH) && fs.readdirSync(SESSION_PATH).length > 0;
+    const profileDir = path.join(SESSION_PATH, 'session');
+    if (!fs.existsSync(profileDir)) {
+      // Fall back: any files under SESSION_PATH count as a saved login
+      return fs.existsSync(SESSION_PATH) && fs.readdirSync(SESSION_PATH).length > 0;
+    }
+
+    // Chrome/WhatsApp auth lives under Default/ or similar profile folders
+    const entries = fs.readdirSync(profileDir);
+    return entries.some((name) => {
+      if (name.startsWith('Singleton')) return false;
+      return true;
+    });
   } catch {
     return false;
   }
@@ -1235,11 +1287,12 @@ function warmupConnection() {
   if (connectionState === 'qr' || connectionState === 'connecting' || connectionState === 'authenticated') {
     return;
   }
-  if (connectionState === 'disconnected' && !hasSavedSession()) {
+  if (!hasSavedSession()) {
     return;
   }
+  console.log('Saved WhatsApp session found — restoring login automatically');
   warmupStarted = true;
-  startConnection();
+  startConnection({ force: false, resetSession: false });
 }
 
 function resetWarmup() {
@@ -1257,5 +1310,6 @@ module.exports = {
   searchChats,
   sendPollToChats,
   isReady,
+  hasSavedSession,
   on,
 };

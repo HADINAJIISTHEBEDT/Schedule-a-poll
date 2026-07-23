@@ -61,9 +61,22 @@ app.post('/api/connect', async (req, res) => {
       return res.json({ ok: true, message: 'Already connected', ...(await whatsapp.refreshStatus()) });
     }
     const force = req.body?.force === true || req.query.force === '1';
-    const resetSession = req.body?.reset === true || req.query.reset === '1';
-    whatsapp.startConnection({ force, resetSession });
-    res.json({ ok: true, message: 'Connecting — scan the QR code', ...(await whatsapp.refreshStatus()) });
+    // Never clear the saved login from Connect — only Disconnect does that.
+    // Ignoring reset keeps one QR scan permanent across deploys/retries.
+    if (req.body?.reset === true || req.query.reset === '1') {
+      console.warn('Ignoring session reset on /api/connect — use Disconnect to clear login');
+    }
+    whatsapp.startConnection({ force, resetSession: false });
+    const status = await whatsapp.refreshStatus();
+    const hasSession = whatsapp.hasSavedSession();
+    res.json({
+      ok: true,
+      message: hasSession
+        ? 'Restoring saved WhatsApp login'
+        : 'Connecting — scan the QR code',
+      ...status,
+      hasSession,
+    });
   } catch (err) {
     console.error('POST /api/connect error:', err.message);
     res.status(500).json({ ok: false, error: err.message, ...whatsapp.getStatus() });
@@ -209,4 +222,16 @@ app.listen(PORT, HOST, async () => {
   console.log(`Poll Scheduler running at http://${HOST}:${PORT}`);
   console.log(`Poll storage backend ready (${polls.length} polls loaded)`);
   scheduler.start();
+
+  // Restore WhatsApp login from persistent disk after deploy/restart
+  try {
+    if (whatsapp.hasSavedSession()) {
+      console.log('Found saved WhatsApp session — restoring automatically');
+      whatsapp.warmupConnection();
+    } else {
+      console.log('No saved WhatsApp session — scan QR once to link permanently');
+    }
+  } catch (err) {
+    console.error('WhatsApp session restore failed to start:', err.message);
+  }
 });

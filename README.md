@@ -128,6 +128,8 @@ POST /api/polls
 - **Root Directory must be blank** — do NOT set it to `src`
 - Use the **Starter** plan or higher
 - A **persistent disk** is configured for WhatsApp session data (`/app/data`)
+- Scan the QR **once** — the login is saved on the disk and survives deploys/restarts
+- Only tap **Disconnect** if you want to unlink and require a new QR scan
 
 ### Fix: `ENOENT package.json` / `project/src/package.json`
 
