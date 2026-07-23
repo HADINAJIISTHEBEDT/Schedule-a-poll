@@ -314,7 +314,8 @@ async function connect() {
     els.connectBtn.disabled = true;
     els.connectBtn.textContent = 'Connecting...';
 
-    const status = await apiFetch('/api/status').then((r) => r.json());
+    const statusRes = await apiFetch('/api/status');
+    const status = await readApiJson(statusRes);
 
     if (status.state === 'ready') {
       await apiFetch('/api/disconnect', { method: 'POST' });
@@ -356,7 +357,7 @@ async function connect() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ force: stuckConnecting, reset: false }),
     });
-    let connectData = await connectRes.json();
+    let connectData = await readApiJson(connectRes);
 
     if (!connectRes.ok && /detached|session closed|target closed/i.test(connectData.error || '')) {
       const retryRes = await apiFetch('/api/connect', {
@@ -364,7 +365,7 @@ async function connect() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ force: true, reset: false }),
       });
-      connectData = await retryRes.json();
+      connectData = await readApiJson(retryRes);
       if (!retryRes.ok) {
         showToast(connectData.error || 'Failed to connect. Tap Connect again.', 'error');
         hideQrOverlay();
