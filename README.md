@@ -165,21 +165,24 @@ Or from GitHub: `https://github.com/HADINAJIISTHEBEDT/Schedule-a-poll/raw/main/r
 
 Or from your running server: `http://localhost:3000/download/apk`
 
+The APK is **zipaligned** and signed with **Play Store–compatible** APK Signature schemes **v1 + v2 + v3**.
+
 ### How to use the APK
 
-1. Install the APK on your Android phone (enable "Install from unknown sources" if asked)
-2. On your PC, run the server: `npm start`
-3. Find your PC's local IP (e.g. `192.168.1.5`)
-4. Open the app on your phone → tap **⚙️** → enter `http://YOUR_PC_IP:3000`
-5. Connect WhatsApp and schedule polls from your phone
+1. **Uninstall any older Poll Scheduler build first** (signature changed — Android will say “App not installed” if you try to overwrite a different signature)
+2. Install the new APK (enable “Install unknown apps” if asked)
+3. Open the app and tap **Connect WhatsApp**
+4. Optional: tap **⚙️** if you need to change the server URL
 
 > The WhatsApp connection runs on your PC/server. The APK is the remote control UI.
 
-### Build APK yourself
+### Build / re-sign APK
 
 ```bash
 npm install
 npm run build:apk
+# Play-compatible signing (v1/v2/v3):
+bash scripts/sign-apk.sh
 ```
 
 Output: `releases/poll-scheduler.apk`
