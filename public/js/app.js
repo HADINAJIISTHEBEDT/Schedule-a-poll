@@ -659,7 +659,7 @@ els.sendNowBtn.addEventListener('click', () => submitPoll(true));
 els.refreshPollsBtn.addEventListener('click', loadPolls);
 
 function openServerSettings() {
-  els.serverUrlInput.value = getApiBase() || 'http://';
+  els.serverUrlInput.value = getApiBase() || DEFAULT_API_BASE || 'http://';
   els.serverOverlay.classList.remove('hidden');
 }
 
@@ -689,8 +689,18 @@ if (!isCapacitorApp()) {
 
 renderOptions();
 setDefaultSchedule();
-if (isCapacitorApp() && !getApiBase()) {
-  openServerSettings();
+if (isCapacitorApp()) {
+  // Default cloud server is baked in — only open settings if user clears it
+  if (!getApiBase()) {
+    openServerSettings();
+  } else {
+    fetchStatus();
+    if (typeof window.initFirebaseRealtime === 'function') {
+      window.initFirebaseRealtime(renderPolls);
+    } else {
+      loadPolls();
+    }
+  }
 } else {
   fetchStatus();
   if (typeof window.initFirebaseRealtime === 'function') {
