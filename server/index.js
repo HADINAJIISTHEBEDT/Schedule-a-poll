@@ -41,7 +41,14 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
 function getDeviceId(req) {
-  return String(req.get('x-device-id') || req.body?.deviceId || req.query.deviceId || '').trim() || null;
+  const fromHeader = String(req.get('x-device-id') || '').trim();
+  const fromBody = String(req.body?.deviceId || '').trim();
+  const fromQuery = String(req.query?.deviceId || '').trim();
+  return fromHeader || fromBody || fromQuery || null;
+}
+
+function ensureDeviceId(req) {
+  return getDeviceId(req) || `anon-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 const apkPath = path.join(__dirname, '..', 'releases', 'poll-scheduler.apk');
@@ -66,7 +73,7 @@ app.get('/api/health', (_req, res) => {
 });
 
 app.get('/api/status', async (req, res) => {
-  const deviceId = getDeviceId(req);
+  const deviceId = ensureDeviceId(req);
   try {
     res.json(await whatsapp.refreshStatus(deviceId));
   } catch (err) {
@@ -77,14 +84,11 @@ app.get('/api/status', async (req, res) => {
 
 app.post('/api/connect', async (req, res) => {
   try {
-    const deviceId = getDeviceId(req);
-    if (!deviceId) {
-      return res.status(400).json({ ok: false, error: 'Missing device id' });
-    }
+    const deviceId = ensureDeviceId(req);
 
     const current = whatsapp.getStatus(deviceId);
     if (current.state === 'ready' && !current.linkedElsewhere) {
-      return res.json({ ok: true, message: 'Already connected', ...current });
+      return res.json({ ok: true, message: 'Already connected', deviceId, ...current });
     }
 
     // Another device owns the live link — log them out and start fresh QR here.
@@ -98,18 +102,23 @@ app.post('/api/connect', async (req, res) => {
     const status = await whatsapp.refreshStatus(deviceId);
     res.json({
       ok: true,
+      deviceId,
       message: status.qr ? 'Scan the QR code' : 'Connecting — QR will appear shortly',
       ...status,
     });
   } catch (err) {
     console.error('POST /api/connect error:', err.message);
-    res.status(500).json({ ok: false, error: err.message, ...whatsapp.getStatus(getDeviceId(req)) });
+    res.status(500).json({
+      ok: false,
+      error: err.message,
+      ...whatsapp.getStatus(ensureDeviceId(req)),
+    });
   }
 });
 
 app.post('/api/disconnect', async (req, res) => {
   try {
-    const deviceId = getDeviceId(req);
+    const deviceId = ensureDeviceId(req);
     const status = whatsapp.getStatus(deviceId);
     if (status.linkedElsewhere) {
       return res.status(403).json({ ok: false, error: 'WhatsApp is linked on another device' });
