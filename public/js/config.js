@@ -16,6 +16,33 @@ function normalizeApiBase(url) {
     .replace(/\?.*$/, '');
 }
 
+/** Per-browser-tab device id (sessionStorage) — never persists WhatsApp login. */
+function getDeviceId() {
+  const key = 'waDeviceId';
+  try {
+    let id = sessionStorage.getItem(key);
+    if (!id) {
+      id =
+        typeof crypto !== 'undefined' && crypto.randomUUID
+          ? crypto.randomUUID()
+          : `dev-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      sessionStorage.setItem(key, id);
+    }
+    return id;
+  } catch {
+    return `dev-${Date.now()}`;
+  }
+}
+
+/** Remove any leftover permanent-login keys from older builds. */
+function clearSavedWhatsAppLoginKeys() {
+  try {
+    ['waLinked', 'waProfile', 'waLastReadyAt'].forEach((k) => localStorage.removeItem(k));
+  } catch {
+    // ignore
+  }
+}
+
 function getIngressToken() {
   const saved = (localStorage.getItem('ingressToken') || '').trim();
   if (saved) return saved;
@@ -76,6 +103,7 @@ function buildNativeHeaders(options = {}) {
   if (token) {
     headers.Cookie = `_ingress_token=${token}`;
   }
+  headers['X-Device-Id'] = getDeviceId();
   return headers;
 }
 
@@ -179,3 +207,5 @@ async function readApiJson(res) {
     throw new Error(res.ok ? 'Invalid response from server' : `Request failed (${res.status})`);
   }
 }
+
+clearSavedWhatsAppLoginKeys();
