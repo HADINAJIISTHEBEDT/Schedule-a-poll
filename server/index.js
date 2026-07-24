@@ -158,9 +158,30 @@ app.post('/api/polls', async (req, res) => {
     return res.status(400).json({ error: 'Poll question is required' });
   }
 
-  const cleanOptions = (options || []).map((o) => o.trim()).filter(Boolean);
+  const cleanOptions = (options || []).map((o) => String(o || '').trim()).filter(Boolean);
   if (cleanOptions.length < 2) {
     return res.status(400).json({ error: 'At least 2 poll options are required' });
+  }
+  if (cleanOptions.length > 12) {
+    return res.status(400).json({ error: 'WhatsApp polls support up to 12 options' });
+  }
+
+  const seenOpts = new Set();
+  for (const opt of cleanOptions) {
+    if (opt.length > 100) {
+      return res.status(400).json({ error: 'Each poll option must be 100 characters or less' });
+    }
+    const key = opt.toLowerCase();
+    if (seenOpts.has(key)) {
+      return res.status(400).json({
+        error: `Duplicate option "${opt}". WhatsApp needs unique options to send the poll.`,
+      });
+    }
+    seenOpts.add(key);
+  }
+
+  if (!question.trim() || question.trim().length > 255) {
+    return res.status(400).json({ error: 'Poll question must be 1–255 characters' });
   }
 
   if (!chatIds?.length) {
@@ -237,6 +258,14 @@ app.listen(PORT, HOST, async () => {
   const polls = await db.getAllPolls().catch(() => []);
   console.log(`Poll Scheduler running at http://${HOST}:${PORT}`);
   console.log(`Poll storage backend ready (${polls.length} polls loaded)`);
+  try {
+    if (typeof db.resetStuckSending === 'function') {
+      const { reset } = await db.resetStuckSending();
+      if (reset) console.log(`Reset ${reset} poll(s) stuck in sending`);
+    }
+  } catch (err) {
+    console.warn('Could not reset stuck polls:', err.message);
+  }
   scheduler.start();
 
   // Restore WhatsApp login from persistent disk after deploy/restart

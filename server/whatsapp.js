@@ -1285,6 +1285,88 @@ async function getChats({ refresh = false, includeContacts = false } = {}) {
   }
 }
 
+async function resolveChatId(chatId) {
+  const id = String(chatId || '').trim();
+  if (!id) return id;
+  if (!id.endsWith('@lid') || !client?.pupPage) return id;
+
+  try {
+    const resolved = await withTimeout(
+      client.pupPage.evaluate(async (lidId) => {
+        const toId = (value) => {
+          if (!value) return null;
+          if (typeof value === 'string') return value;
+          if (value._serialized) return value._serialized;
+          if (value.user && value.server) return `${value.user}@${value.server}`;
+          return null;
+        };
+
+        try {
+          const wid = window.require('WAWebWidFactory').createWid(lidId);
+          const phone = window.require('WAWebApiContact').getPhoneNumber(wid);
+          const phoneId = toId(phone);
+          if (phoneId && !phoneId.endsWith('@lid')) return phoneId;
+        } catch {
+          // continue
+        }
+
+        try {
+          if (window.WWebJS?.enforceLidAndPnRetrieval) {
+            const result = await window.WWebJS.enforceLidAndPnRetrieval(lidId);
+            const phoneId = toId(result?.phone);
+            if (phoneId && !phoneId.endsWith('@lid')) return phoneId;
+          }
+        } catch {
+          // continue
+        }
+
+        try {
+          const contact = window.require('WAWebCollections').Contact.get(lidId);
+          const phoneId = toId(contact?.phoneNumber);
+          if (phoneId && !phoneId.endsWith('@lid')) return phoneId;
+        } catch {
+          // continue
+        }
+
+        return lidId;
+      }, id),
+      10000,
+      'Resolve chat id'
+    );
+    if (resolved && resolved !== id) {
+      console.log(`Resolved chat id ${id} → ${resolved}`);
+    }
+    return resolved || id;
+  } catch (err) {
+    console.warn(`Could not resolve ${id}:`, err.message);
+    return id;
+  }
+}
+
+function normalizePollOptions(options) {
+  const cleaned = (options || []).map((o) => String(o || '').trim()).filter(Boolean);
+  if (cleaned.length < 2) {
+    throw new Error('A poll needs at least 2 options');
+  }
+  if (cleaned.length > 12) {
+    throw new Error('WhatsApp polls support up to 12 options');
+  }
+
+  const seen = new Set();
+  for (const opt of cleaned) {
+    if (opt.length > 100) {
+      throw new Error(`Poll option is too long (max 100 characters): "${opt.slice(0, 40)}…"`);
+    }
+    const key = opt.toLowerCase();
+    if (seen.has(key)) {
+      throw new Error(`Duplicate poll option "${opt}". Each option must be unique for WhatsApp to send the poll.`);
+    }
+    seen.add(key);
+  }
+
+  return cleaned;
+}
+
 async function sendPollToChats({
   question,
   options,
@@ -1293,28 +1375,44 @@ async function sendPollToChats({
   humanDelayMin = 3,
   humanDelayMax = 12,
 }) {
-  if (!client || connectionState !== 'ready') {
+  if (!client || (connectionState !== 'ready' && connectionState !== 'authenticated')) {
     throw new Error('WhatsApp is not connected');
   }
 
-  if (!options || options.length < 2) {
-    throw new Error('A poll needs at least 2 options');
+  // Prefer marking ready if we can — sending while only authenticated often works after link
+  if (connectionState !== 'ready') {
+    await tryFinalizeReady(client).catch(() => {});
+  }
+  if (!client) {
+    throw new Error('WhatsApp is not connected');
   }
 
-  if (options.length > 12) {
-    throw new Error('WhatsApp polls support up to 12 options');
+  const cleanQuestion = String(question || '').trim();
+  if (!cleanQuestion) {
+    throw new Error('Poll question is required');
+  }
+  if (cleanQuestion.length > 255) {
+    throw new Error('Poll question is too long (max 255 characters)');
   }
 
-  const poll = new Poll(question, options, {
+  const cleanOptions = normalizePollOptions(options);
+  if (!chatIds?.length) {
+    throw new Error('Select at least one chat');
+  }
+
+  const poll = new Poll(cleanQuestion, cleanOptions, {
     allowMultipleAnswers: allowMultiple,
   });
 
   const results = [];
 
   for (let i = 0; i < chatIds.length; i++) {
-    const chatId = chatIds[i];
+    const originalId = chatIds[i];
+    let chatId = originalId;
 
     try {
+      chatId = await resolveChatId(originalId);
+
       await staggeredChatDelay(i, {
         minSeconds: humanDelayMin,
         maxSeconds: humanDelayMax,
@@ -1322,28 +1420,45 @@ async function sendPollToChats({
 
       let chat = null;
       try {
-        chat = await client.getChatById(chatId);
+        chat = await withTimeout(client.getChatById(chatId), 15000, 'Load chat');
       } catch (err) {
         console.warn(`getChatById failed for ${chatId}:`, err.message);
+        // Try opening/creating chat via WID find
+        try {
+          await client.pupPage.evaluate(async (id) => {
+            const wid = window.require('WAWebWidFactory').createWid(id);
+            await window.require('WAWebCollections').Chat.find(wid);
+          }, chatId);
+          chat = await client.getChatById(chatId).catch(() => null);
+        } catch {
+          // continue — sendMessage may still work
+        }
       }
 
       if (chat) {
-        await humanLikeDelay(chat, question, {
-          minSeconds: humanDelayMin,
-          maxSeconds: humanDelayMax,
+        await humanLikeDelay(chat, cleanQuestion, {
+          minSeconds: Math.min(humanDelayMin, 3),
+          maxSeconds: Math.min(humanDelayMax, 6),
         });
       } else {
-        await sleep(randomBetween(humanDelayMin * 1000, humanDelayMax * 1000));
+        await sleep(randomBetween(800, 2000));
       }
 
-      await client.sendMessage(chatId, poll, {
-        sendSeen: false,
-        waitUntilMsgSent: true,
-      });
+      // waitUntilMsgSent:true can hang forever on some polls (esp. LID / duplicates)
+      await withTimeout(
+        client.sendMessage(chatId, poll, {
+          sendSeen: false,
+          waitUntilMsgSent: false,
+        }),
+        45000,
+        'Send poll'
+      );
 
       results.push({ chatId, success: true });
+      console.log(`Poll sent to ${chatId}`);
     } catch (err) {
-      results.push({ chatId, success: false, error: err.message });
+      console.error(`Poll send failed for ${originalId}:`, err.message);
+      results.push({ chatId: originalId, success: false, error: err.message || 'Send failed' });
     }
   }
 

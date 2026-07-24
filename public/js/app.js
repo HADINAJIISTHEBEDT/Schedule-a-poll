@@ -540,6 +540,14 @@ async function submitPoll(sendNow = false) {
 
   if (!question) return showToast('Enter a poll question', 'error');
   if (options.length < 2) return showToast('Add at least 2 options', 'error');
+  if (options.length > 12) return showToast('Maximum 12 options', 'error');
+  const unique = new Set(options.map((o) => o.toLowerCase()));
+  if (unique.size !== options.length) {
+    return showToast('Each poll option must be unique', 'error');
+  }
+  if (options.some((o) => o.length > 100)) {
+    return showToast('Each option must be 100 characters or less', 'error');
+  }
   if (!chatIds.length) return showToast('Select at least one chat', 'error');
   if (delayMin > delayMax) return showToast('Min delay must be ≤ max delay', 'error');
 
@@ -571,8 +579,8 @@ async function submitPoll(sendNow = false) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error);
+    const data = await readApiJson(res);
+    if (!res.ok) throw new Error(data?.error || 'Failed to save poll');
 
     showToast(sendNow ? 'Poll is being sent naturally...' : 'Poll scheduled!');
     els.question.value = '';

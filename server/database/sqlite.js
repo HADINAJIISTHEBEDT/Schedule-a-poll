@@ -178,6 +178,17 @@ module.exports = {
     });
   },
 
+  async resetStuckSending() {
+    const result = db
+      .prepare(
+        `UPDATE scheduled_polls
+         SET status = 'failed', error = COALESCE(NULLIF(error, ''), 'Send interrupted — try Send now again')
+         WHERE status = 'sending'`
+      )
+      .run();
+    return { reset: result.changes || 0 };
+  },
+
   async deletePoll(id) {
     const result = deletePollStmt.run(normalizeId(id));
     return { deleted: result.changes > 0 };

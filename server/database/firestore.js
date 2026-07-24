@@ -115,6 +115,19 @@ module.exports = {
     });
   },
 
+  async resetStuckSending() {
+    const snap = await collection().where('status', '==', 'sending').get();
+    let reset = 0;
+    for (const doc of snap.docs) {
+      await doc.ref.update({
+        status: 'failed',
+        error: doc.data().error || 'Send interrupted — try Send now again',
+      });
+      reset += 1;
+    }
+    return { reset };
+  },
+
   async deletePoll(id) {
     const ref = collection().doc(String(id));
     const doc = await ref.get();
