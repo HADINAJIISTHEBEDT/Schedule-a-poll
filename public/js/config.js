@@ -5,8 +5,33 @@ const DEFAULT_API_BASE =
 /** Cursor cloud ingress token — required for the APK to reach the agent URL. */
 const DEFAULT_INGRESS_TOKEN = 'nto-frwbpiremvehxl25t44fr7nzpe';
 
+const STORAGE_KEYS = {
+  apiBase: 'apiBase',
+  ingressToken: 'ingressToken',
+  waLinked: 'waLinked',
+  waProfile: 'waProfile',
+  lastReadyAt: 'waLastReadyAt',
+};
+
 function isCapacitorApp() {
   return window.Capacitor?.isNativePlatform?.() || /Capacitor/i.test(navigator.userAgent);
+}
+
+function storageGet(key) {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function storageSet(key, value) {
+  try {
+    if (value == null || value === '') localStorage.removeItem(key);
+    else localStorage.setItem(key, String(value));
+  } catch {
+    // private mode / blocked storage
+  }
 }
 
 function normalizeApiBase(url) {
@@ -16,8 +41,21 @@ function normalizeApiBase(url) {
     .replace(/\?.*$/, '');
 }
 
+function ensureLoginDefaultsInStorage() {
+  // Write defaults once so APK/web keep the same server after restarts
+  if (isCapacitorApp()) {
+    if (!normalizeApiBase(storageGet(STORAGE_KEYS.apiBase) || '')) {
+      storageSet(STORAGE_KEYS.apiBase, DEFAULT_API_BASE);
+    }
+    const base = getApiBase();
+    if (/agent\.cvm\.dev/i.test(base) && !String(storageGet(STORAGE_KEYS.ingressToken) || '').trim()) {
+      storageSet(STORAGE_KEYS.ingressToken, DEFAULT_INGRESS_TOKEN);
+    }
+  }
+}
+
 function getIngressToken() {
-  const saved = (localStorage.getItem('ingressToken') || '').trim();
+  const saved = String(storageGet(STORAGE_KEYS.ingressToken) || '').trim();
   if (saved) return saved;
   const base = getApiBase();
   if (/agent\.cvm\.dev/i.test(base)) return DEFAULT_INGRESS_TOKEN;
@@ -25,14 +63,12 @@ function getIngressToken() {
 }
 
 function setIngressToken(token) {
-  const value = String(token || '').trim();
-  if (value) localStorage.setItem('ingressToken', value);
-  else localStorage.removeItem('ingressToken');
+  storageSet(STORAGE_KEYS.ingressToken, String(token || '').trim());
 }
 
 function getApiBase() {
   if (!isCapacitorApp()) return '';
-  const saved = normalizeApiBase(localStorage.getItem('apiBase') || '');
+  const saved = normalizeApiBase(storageGet(STORAGE_KEYS.apiBase) || '');
   if (saved) return saved;
   return DEFAULT_API_BASE;
 }
@@ -44,17 +80,54 @@ function setApiBase(url) {
     const parsed = new URL(raw);
     const token = parsed.searchParams.get('_ingress_token');
     if (token) setIngressToken(token);
-    const value = normalizeApiBase(`${parsed.origin}${parsed.pathname}`.replace(/\/download\/apk\/?$/i, ''));
-    if (value) localStorage.setItem('apiBase', value);
-    else localStorage.removeItem('apiBase');
+    const value = normalizeApiBase(
+      `${parsed.origin}${parsed.pathname}`.replace(/\/download\/apk\/?$/i, '')
+    );
+    storageSet(STORAGE_KEYS.apiBase, value);
     return;
   } catch {
     // not a full URL
   }
 
-  const value = normalizeApiBase(raw);
-  if (value) localStorage.setItem('apiBase', value);
-  else localStorage.removeItem('apiBase');
+  storageSet(STORAGE_KEYS.apiBase, normalizeApiBase(raw));
+}
+
+/** Save WhatsApp linked profile in localStorage (UI + restore hint). */
+function saveWhatsAppLogin(connectedInfo) {
+  storageSet(STORAGE_KEYS.waLinked, '1');
+  storageSet(STORAGE_KEYS.lastReadyAt, new Date().toISOString());
+  if (connectedInfo && typeof connectedInfo === 'object') {
+    try {
+      storageSet(STORAGE_KEYS.waProfile, JSON.stringify({
+        pushname: connectedInfo.pushname || null,
+        phone: connectedInfo.phone || null,
+        platform: connectedInfo.platform || null,
+      }));
+    } catch {
+      // ignore
+    }
+  }
+}
+
+function clearWhatsAppLogin() {
+  storageSet(STORAGE_KEYS.waLinked, '');
+  storageSet(STORAGE_KEYS.waProfile, '');
+  storageSet(STORAGE_KEYS.lastReadyAt, '');
+}
+
+function getSavedWhatsAppLogin() {
+  const linked = storageGet(STORAGE_KEYS.waLinked) === '1';
+  let profile = null;
+  try {
+    profile = JSON.parse(storageGet(STORAGE_KEYS.waProfile) || 'null');
+  } catch {
+    profile = null;
+  }
+  return {
+    linked,
+    profile,
+    lastReadyAt: storageGet(STORAGE_KEYS.lastReadyAt) || null,
+  };
 }
 
 function apiUrl(path) {

@@ -235,7 +235,22 @@ function openQrOverlay() {
   }
 }
 
-function updateConnectionUI({ state: connState, qr, connectedInfo, hasSession, restoring }) {
+function applySavedLoginHint() {
+  if (typeof getSavedWhatsAppLogin !== 'function') return;
+  const saved = getSavedWhatsAppLogin();
+  if (!saved.linked) return;
+
+  const profile = saved.profile;
+  const name = profile?.pushname || 'WhatsApp';
+  if (state.connectionState === 'disconnected' || state.connectionState === 'connecting') {
+    els.statusText.textContent = profile?.phone
+      ? `Restoring ${name} (+${profile.phone})…`
+      : 'Restoring saved login…';
+    els.statusDot.className = 'status-dot connecting';
+  }
+}
+
+function updateConnectionUI({ state: connState, qr, connectedInfo, hasSession, restoring, loggedOut }) {
   const wasReady = state.connectionState === 'ready';
   state.connectionState = connState;
   els.statusDot.className = `status-dot ${connState}`;
@@ -253,9 +268,32 @@ function updateConnectionUI({ state: connState, qr, connectedInfo, hasSession, r
     // fall through — restoring handled below
   }
 
-  if (restoring) {
-    els.statusText.textContent =
-      connState === 'authenticated' ? 'Linked — finishing sync...' : 'Restoring saved login...';
+  // Persist linked profile in localStorage whenever WhatsApp is ready
+  if (connState === 'ready' && typeof saveWhatsAppLogin === 'function') {
+    saveWhatsAppLogin(connectedInfo);
+  }
+  if (
+    (connState === 'auth_failure' || loggedOut) &&
+    typeof clearWhatsAppLogin === 'function'
+  ) {
+    clearWhatsAppLogin();
+  }
+
+  const savedLogin =
+    typeof getSavedWhatsAppLogin === 'function' ? getSavedWhatsAppLogin() : { linked: false };
+  const isRestoring =
+    restoring ||
+    ((connState === 'connecting' || connState === 'authenticated') &&
+      (hasSession || savedLogin.linked) &&
+      !qr);
+
+  if (isRestoring) {
+    if (savedLogin.profile?.pushname && connState !== 'authenticated') {
+      els.statusText.textContent = `Restoring ${savedLogin.profile.pushname}…`;
+    } else {
+      els.statusText.textContent =
+        connState === 'authenticated' ? 'Linked — finishing sync...' : 'Restoring saved login...';
+    }
   } else {
     els.statusText.textContent = labels[connState] || connState;
   }
@@ -269,7 +307,7 @@ function updateConnectionUI({ state: connState, qr, connectedInfo, hasSession, r
     if (!wasReady) showToast('WhatsApp connected!');
   } else if (connState === 'connecting' || connState === 'authenticated') {
     // Only skip QR UI when truly restoring an existing login
-    if (restoring) {
+    if (isRestoring) {
       hideQrOverlay();
     } else if (!state.qrDismissed) {
       if (connState === 'connecting' && !qr && !lastQrUrl) {
@@ -324,6 +362,7 @@ async function connect() {
 
     if (status.state === 'ready') {
       await apiFetch('/api/disconnect', { method: 'POST' });
+      if (typeof clearWhatsAppLogin === 'function') clearWhatsAppLogin();
       state.searchResults = [];
       state.selectedChats.clear();
       state.selectedChatMeta.clear();
@@ -707,12 +746,65 @@ if (!isCapacitorApp()) {
 
 renderOptions();
 setDefaultSchedule();
+
+// Persist default server URL + ingress token + restore linked login from localStorage
+if (typeof ensureLoginDefaultsInStorage === 'function') {
+  ensureLoginDefaultsInStorage();
+}
+applySavedLoginHint();
+
+async function bootstrapSession() {
+  applySavedLoginHint();
+  try {
+    const res = await apiFetch('/api/status');
+    const data = await readApiJson(res);
+    updateConnectionUI(data);
+
+    const saved =
+      typeof getSavedWhatsAppLogin === 'function' ? getSavedWhatsAppLogin() : { linked: false };
+    const waiting =
+      data.state === 'connecting' || data.state === 'qr' || data.state === 'authenticated';
+
+    if (waiting) {
+      pollStatus(true);
+      return;
+    }
+
+    // Auto-restore when server has a session OR localStorage says we were linked
+    if (
+      data.state !== 'ready' &&
+      (data.hasSession || saved.linked)
+    ) {
+      applySavedLoginHint();
+      updateConnectionUI({
+        state: 'connecting',
+        hasSession: !!data.hasSession,
+        restoring: true,
+      });
+      try {
+        const connectRes = await apiFetch('/api/connect', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ force: false, reset: false }),
+        });
+        const connectData = await readApiJson(connectRes);
+        updateConnectionUI({ ...connectData, restoring: connectData.restoring ?? true });
+        pollStatus(true);
+      } catch {
+        // stay disconnected; user can tap Connect
+      }
+    }
+  } catch {
+    applySavedLoginHint();
+  }
+}
+
 if (isCapacitorApp()) {
   // Default cloud server is baked in — only open settings if user clears it
   if (!getApiBase()) {
     openServerSettings();
   } else {
-    fetchStatus();
+    bootstrapSession();
     if (typeof window.initFirebaseRealtime === 'function') {
       window.initFirebaseRealtime(renderPolls);
     } else {
@@ -720,7 +812,7 @@ if (isCapacitorApp()) {
     }
   }
 } else {
-  fetchStatus();
+  bootstrapSession();
   if (typeof window.initFirebaseRealtime === 'function') {
     window.initFirebaseRealtime(renderPolls);
   } else {
