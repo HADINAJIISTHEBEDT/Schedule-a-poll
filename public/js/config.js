@@ -16,6 +16,33 @@ function normalizeApiBase(url) {
     .replace(/\?.*$/, '');
 }
 
+/** Per-browser-tab device id (sessionStorage) — never persists WhatsApp login. */
+function getDeviceId() {
+  const key = 'waDeviceId';
+  try {
+    let id = sessionStorage.getItem(key);
+    if (!id) {
+      id =
+        typeof crypto !== 'undefined' && crypto.randomUUID
+          ? crypto.randomUUID()
+          : `dev-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      sessionStorage.setItem(key, id);
+    }
+    return id;
+  } catch {
+    return `dev-${Date.now()}`;
+  }
+}
+
+/** Remove any leftover permanent-login keys from older builds. */
+function clearSavedWhatsAppLoginKeys() {
+  try {
+    ['waLinked', 'waProfile', 'waLastReadyAt'].forEach((k) => localStorage.removeItem(k));
+  } catch {
+    // ignore
+  }
+}
+
 function getIngressToken() {
   const saved = (localStorage.getItem('ingressToken') || '').trim();
   if (saved) return saved;
@@ -76,6 +103,7 @@ function buildNativeHeaders(options = {}) {
   if (token) {
     headers.Cookie = `_ingress_token=${token}`;
   }
+  headers['X-Device-Id'] = getDeviceId();
   return headers;
 }
 
@@ -98,10 +126,15 @@ function toResponseLike(status, data) {
 
 async function apiFetch(path, options = {}) {
   const base = getApiBase();
-  const url = apiUrl(path);
   const method = (options.method || 'GET').toUpperCase();
   const headers = buildNativeHeaders(options);
   const token = getIngressToken();
+  const deviceId = getDeviceId();
+
+  // Put deviceId in the query too — some proxies strip custom headers.
+  let url = apiUrl(path);
+  const join = url.includes('?') ? '&' : '?';
+  url += `${join}deviceId=${encodeURIComponent(deviceId)}`;
 
   // Capacitor native HTTP can send Cookie headers (browser fetch cannot).
   const Http = window.Capacitor?.Plugins?.CapacitorHttp;
@@ -128,6 +161,16 @@ async function apiFetch(path, options = {}) {
         } else {
           request.data = options.body;
         }
+      } else if (method === 'POST' || method === 'PUT' || method === 'PATCH') {
+        request.data = { deviceId };
+        if (!headers['Content-Type'] && !headers['content-type']) {
+          headers['Content-Type'] = 'application/json';
+        }
+      }
+
+      // Always include deviceId on JSON bodies
+      if (request.data && typeof request.data === 'object' && !Array.isArray(request.data)) {
+        request.data.deviceId = deviceId;
       }
 
       const result = await Http.request(request);
@@ -147,9 +190,23 @@ async function apiFetch(path, options = {}) {
     finalUrl += (finalUrl.includes('?') ? '&' : '?') + `_ingress_token=${encodeURIComponent(token)}`;
   }
 
+  let body = options.body;
+  if (body && typeof body === 'string') {
+    try {
+      const parsed = JSON.parse(body);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        parsed.deviceId = deviceId;
+        body = JSON.stringify(parsed);
+      }
+    } catch {
+      // leave body as-is
+    }
+  }
+
   try {
     return await fetch(finalUrl, {
       ...options,
+      body,
       credentials: 'include',
       headers,
     });
@@ -179,3 +236,5 @@ async function readApiJson(res) {
     throw new Error(res.ok ? 'Invalid response from server' : `Request failed (${res.status})`);
   }
 }
+
+clearSavedWhatsAppLoginKeys();

@@ -235,13 +235,13 @@ function openQrOverlay() {
   }
 }
 
-function updateConnectionUI({ state: connState, qr, connectedInfo, hasSession, restoring }) {
+function updateConnectionUI({ state: connState, qr, connectedInfo, hasSession, restoring, linkedElsewhere }) {
   const wasReady = state.connectionState === 'ready';
   state.connectionState = connState;
   els.statusDot.className = `status-dot ${connState}`;
 
   const labels = {
-    disconnected: 'Disconnected',
+    disconnected: linkedElsewhere ? 'Not linked on this device' : 'Disconnected',
     connecting: 'Connecting...',
     qr: 'Scan QR Code',
     authenticated: 'Syncing WhatsApp...',
@@ -249,16 +249,7 @@ function updateConnectionUI({ state: connState, qr, connectedInfo, hasSession, r
     auth_failure: 'Auth failed',
   };
 
-  if ((connState === 'connecting' || connState === 'authenticated') && hasSession && !qr) {
-    // fall through — restoring handled below
-  }
-
-  if (restoring) {
-    els.statusText.textContent =
-      connState === 'authenticated' ? 'Linked — finishing sync...' : 'Restoring saved login...';
-  } else {
-    els.statusText.textContent = labels[connState] || connState;
-  }
+  els.statusText.textContent = labels[connState] || connState;
 
   if (connState === 'qr' && qr) {
     showQrOverlay(qr);
@@ -268,10 +259,7 @@ function updateConnectionUI({ state: connState, qr, connectedInfo, hasSession, r
     hideQrOverlay();
     if (!wasReady) showToast('WhatsApp connected!');
   } else if (connState === 'connecting' || connState === 'authenticated') {
-    // Only skip QR UI when truly restoring an existing login
-    if (restoring) {
-      hideQrOverlay();
-    } else if (!state.qrDismissed) {
+    if (!state.qrDismissed) {
       if (connState === 'connecting' && !qr && !lastQrUrl) {
         showQrLoading();
       } else if (lastQrUrl) {
@@ -360,7 +348,7 @@ async function connect() {
     const connectRes = await apiFetch('/api/connect', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ force: stuckConnecting, reset: false }),
+      body: JSON.stringify({ force: stuckConnecting, reset: true, deviceId: getDeviceId() }),
     });
     let connectData = await readApiJson(connectRes);
 
@@ -368,7 +356,7 @@ async function connect() {
       const retryRes = await apiFetch('/api/connect', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ force: true, reset: false }),
+        body: JSON.stringify({ force: true, reset: true, deviceId: getDeviceId() }),
       });
       connectData = await readApiJson(retryRes);
       if (!retryRes.ok) {
@@ -385,8 +373,6 @@ async function connect() {
     updateConnectionUI(connectData);
     if (connectData.qr) {
       showToast('Scan the QR code');
-    } else if (connectData.restoring) {
-      showToast('Restoring saved WhatsApp login...');
     } else {
       showToast('Starting WhatsApp — QR will appear shortly');
     }

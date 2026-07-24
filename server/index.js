@@ -30,7 +30,7 @@ process.on('unhandledRejection', (reason) => {
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Device-Id');
   if (req.method === 'OPTIONS') {
     return res.sendStatus(204);
   }
@@ -39,6 +39,17 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '..', 'public')));
+
+function getDeviceId(req) {
+  const fromHeader = String(req.get('x-device-id') || '').trim();
+  const fromBody = String(req.body?.deviceId || '').trim();
+  const fromQuery = String(req.query?.deviceId || '').trim();
+  return fromHeader || fromBody || fromQuery || null;
+}
+
+function ensureDeviceId(req) {
+  return getDeviceId(req) || `anon-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
 
 const apkPath = path.join(__dirname, '..', 'releases', 'poll-scheduler.apk');
 
@@ -61,46 +72,57 @@ app.get('/api/health', (_req, res) => {
   res.json({ ok: true });
 });
 
-app.get('/api/status', async (_req, res) => {
-  whatsapp.warmupConnection();
+app.get('/api/status', async (req, res) => {
+  const deviceId = ensureDeviceId(req);
   try {
-    res.json(await whatsapp.refreshStatus());
+    res.json(await whatsapp.refreshStatus(deviceId));
   } catch (err) {
     console.error('GET /api/status error:', err.message);
-    res.json(whatsapp.getStatus());
+    res.json(whatsapp.getStatus(deviceId));
   }
 });
 
 app.post('/api/connect', async (req, res) => {
   try {
-    if (whatsapp.isReady()) {
-      return res.json({ ok: true, message: 'Already connected', ...(await whatsapp.refreshStatus()) });
+    const deviceId = ensureDeviceId(req);
+
+    const current = whatsapp.getStatus(deviceId);
+    if (current.state === 'ready' && !current.linkedElsewhere) {
+      return res.json({ ok: true, message: 'Already connected', deviceId, ...current });
     }
+
+    // Another device owns the live link — log them out and start fresh QR here.
+    if (whatsapp.isReady() || current.linkedElsewhere) {
+      console.log('Connect from new device — clearing previous ephemeral link');
+      await whatsapp.disconnect({ userInitiated: true });
+    }
+
     const force = req.body?.force === true || req.query.force === '1';
-    // Never clear the saved login from Connect — only Disconnect does that.
-    // Ignoring reset keeps one QR scan permanent across deploys/retries.
-    if (req.body?.reset === true || req.query.reset === '1') {
-      console.warn('Ignoring session reset on /api/connect — use Disconnect to clear login');
-    }
-    whatsapp.startConnection({ force, resetSession: false });
-    const status = await whatsapp.refreshStatus();
+    whatsapp.startConnection({ force, resetSession: true, deviceId });
+    const status = await whatsapp.refreshStatus(deviceId);
     res.json({
       ok: true,
-      message: status.restoring
-        ? 'Restoring saved WhatsApp login'
-        : status.qr
-          ? 'Scan the QR code'
-          : 'Connecting — QR will appear shortly',
+      deviceId,
+      message: status.qr ? 'Scan the QR code' : 'Connecting — QR will appear shortly',
       ...status,
     });
   } catch (err) {
     console.error('POST /api/connect error:', err.message);
-    res.status(500).json({ ok: false, error: err.message, ...whatsapp.getStatus() });
+    res.status(500).json({
+      ok: false,
+      error: err.message,
+      ...whatsapp.getStatus(ensureDeviceId(req)),
+    });
   }
 });
 
-app.post('/api/disconnect', async (_req, res) => {
+app.post('/api/disconnect', async (req, res) => {
   try {
+    const deviceId = ensureDeviceId(req);
+    const status = whatsapp.getStatus(deviceId);
+    if (status.linkedElsewhere) {
+      return res.status(403).json({ ok: false, error: 'WhatsApp is linked on another device' });
+    }
     await whatsapp.disconnect({ userInitiated: true });
     res.json({ ok: true });
   } catch (err) {
@@ -268,20 +290,23 @@ app.listen(PORT, HOST, async () => {
   }
   scheduler.start();
 
-  // Restore WhatsApp login from persistent disk after deploy/restart
+  // Wipe any leftover on-disk WhatsApp login — sessions are ephemeral now
   try {
     const dataDir = path.join(__dirname, '..', 'data');
     fs.mkdirSync(dataDir, { recursive: true });
     fs.accessSync(dataDir, fs.constants.W_OK);
     console.log('Data directory writable:', dataDir);
 
-    if (whatsapp.hasSavedSession()) {
-      console.log('Found saved WhatsApp session — restoring automatically');
-      whatsapp.warmupConnection();
-    } else {
-      console.log('No saved WhatsApp session — scan QR once to link permanently');
+    if (typeof whatsapp.hasSavedSession === 'function') {
+      // Force-clear disk artifacts from older permanent-login builds
+      const sessionPath = path.join(dataDir, 'whatsapp-session');
+      if (fs.existsSync(sessionPath)) {
+        fs.rmSync(sessionPath, { recursive: true, force: true });
+        console.log('Cleared leftover WhatsApp session files');
+      }
     }
+    console.log('WhatsApp login is ephemeral — each device starts from QR');
   } catch (err) {
-    console.error('WhatsApp session restore / data dir check failed:', err.message);
+    console.error('WhatsApp session cleanup / data dir check failed:', err.message);
   }
 });
