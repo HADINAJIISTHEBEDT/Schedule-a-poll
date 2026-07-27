@@ -8,3 +8,4 @@ android-sdk/
 serviceAccount*.json
 firebase-adminsdk*.json
 .DS_Store
+android-sdk/
