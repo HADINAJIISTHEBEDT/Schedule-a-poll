@@ -20,6 +20,7 @@
         </div>
       </div>
       <div class="connection-panel" id="connectionPanel">
+        <a class="btn btn-ghost btn-sm" id="downloadApkBtn" href="/download/apk" download="poll-scheduler.apk">Download APK</a>
         <button type="button" class="btn btn-ghost btn-sm" id="serverSettingsBtn" title="Server settings">⚙️</button>
         <span class="status-dot" id="statusDot"></span>
         <span id="statusText">Disconnected</span>
@@ -32,8 +33,8 @@
         <h2>Server Connection</h2>
         <p>Enter the address where the app is running (your PC or server).</p>
         <p class="hint-block">Example: <code>http://192.168.1.5:3000</code></p>
-        <input type="url" id="serverUrlInput" placeholder="https://…agent.cvm.dev/?_ingress_token=…" />
-        <p class="hint">Paste the full cloud link including <code>_ingress_token</code>.</p>
+        <input type="url" id="serverUrlInput" placeholder="https://schedule-a-poll.onrender.com" />
+        <p class="hint">Use the permanent Render link: <code>https://schedule-a-poll.onrender.com</code></p>
         <div class="form-actions" style="margin-top:16px">
           <button type="button" class="btn btn-primary" id="saveServerBtn">Save & Connect</button>
           <button type="button" class="btn btn-ghost" id="closeServerBtn">Cancel</button>

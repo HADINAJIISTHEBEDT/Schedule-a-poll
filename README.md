@@ -159,13 +159,13 @@ If you created a **Node** service by mistake, delete it and redeploy with **Dock
 
 Download the mobile app:
 
-**[Download poll-scheduler.apk](https://schedule-a-poll.onrender.com/download/apk)**
+**Web (always on):** https://schedule-a-poll.onrender.com
+
+**APK download (always on):** https://schedule-a-poll.onrender.com/download/apk
+
+Also works: `/download`, `/apk`, `/releases/poll-scheduler.apk` on the same host.
 
 Or from GitHub: `https://github.com/HADINAJIISTHEBEDT/Schedule-a-poll/raw/main/releases/poll-scheduler.apk`
-
-Or from your running server: `http://localhost:3000/download/apk`
-
-The APK defaults permanently to **`https://schedule-a-poll.onrender.com`** (Render). Temporary Cursor cloud-agent links expire and are not used as the default.
 
 ### How to use the APK
 

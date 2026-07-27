@@ -42,18 +42,45 @@ app.use(express.static(path.join(__dirname, '..', 'public')));
 
 const apkPath = path.join(__dirname, '..', 'releases', 'poll-scheduler.apk');
 
-app.get('/download/apk', (_req, res) => {
+function sendApk(req, res) {
   if (!fs.existsSync(apkPath)) {
-    return res.status(404).json({ error: 'APK not built yet. Run: npm run build:apk' });
+    return res.status(404).json({
+      error: 'APK not found on this server',
+      hint: 'Use https://schedule-a-poll.onrender.com/download/apk',
+    });
   }
-  res.download(apkPath, 'poll-scheduler.apk');
-});
+  res.setHeader('Cache-Control', 'no-store');
+  return res.download(apkPath, 'poll-scheduler.apk');
+}
+
+// Multiple paths so old/bookmark/wrong links don't 404
+app.get(
+  [
+    '/download',
+    '/download/',
+    '/download/apk',
+    '/download/apk/',
+    '/apk',
+    '/apk.apk',
+    '/poll-scheduler.apk',
+    '/releases/poll-scheduler.apk',
+  ],
+  sendApk
+);
 
 app.get('/api/download', (_req, res) => {
   if (!fs.existsSync(apkPath)) {
-    return res.json({ available: false, url: null });
+    return res.json({
+      available: false,
+      url: null,
+      fallback: 'https://schedule-a-poll.onrender.com/download/apk',
+    });
   }
-  res.json({ available: true, url: '/download/apk' });
+  res.json({
+    available: true,
+    url: '/download/apk',
+    absolute: 'https://schedule-a-poll.onrender.com/download/apk',
+  });
 });
 
 app.get('/api/health', (_req, res) => {
