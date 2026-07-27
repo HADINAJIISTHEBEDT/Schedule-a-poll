@@ -674,10 +674,11 @@ els.refreshPollsBtn.addEventListener('click', loadPolls);
 
 function openServerSettings() {
   const base = getApiBase() || DEFAULT_API_BASE || '';
-  const token = getIngressToken();
-  els.serverUrlInput.value = token
-    ? `${base}/?_ingress_token=${token}`
-    : base || 'http://';
+  const token = typeof getIngressToken === 'function' ? getIngressToken() : '';
+  els.serverUrlInput.value =
+    token && /agent\.cvm\.dev/i.test(base)
+      ? `${base}/?_ingress_token=${token}`
+      : base || DEFAULT_API_BASE;
   els.serverOverlay.classList.remove('hidden');
 }
 

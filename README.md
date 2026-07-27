@@ -159,13 +159,13 @@ If you created a **Node** service by mistake, delete it and redeploy with **Dock
 
 Download the mobile app:
 
-**[Download poll-scheduler.apk](https://p-3000-pod-vdzcpbtkyndxlpcmjqfuozh5o4-8d6b3a75d5a0d05a8a0f-us3.agent.cvm.dev/download/apk?_ingress_token=nto-frwbpiremvehxl25t44fr7nzpe)**
+**[Download poll-scheduler.apk](https://schedule-a-poll.onrender.com/download/apk)**
 
 Or from GitHub: `https://github.com/HADINAJIISTHEBEDT/Schedule-a-poll/raw/main/releases/poll-scheduler.apk`
 
 Or from your running server: `http://localhost:3000/download/apk`
 
-The APK is **zipaligned** and signed with **Play Store–compatible** APK Signature schemes **v1 + v2 + v3**.
+The APK defaults permanently to **`https://schedule-a-poll.onrender.com`** (Render). Temporary Cursor cloud-agent links expire and are not used as the default.
 
 ### How to use the APK
 

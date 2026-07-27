@@ -1,9 +1,5 @@
-/** Default backend for the Android APK (Capacitor). Web browser uses same-origin. */
-const DEFAULT_API_BASE =
-  'https://p-3000-pod-vdzcpbtkyndxlpcmjqfuozh5o4-8d6b3a75d5a0d05a8a0f-us3.agent.cvm.dev';
-
-/** Cursor cloud ingress token — required for the APK to reach the agent URL. */
-const DEFAULT_INGRESS_TOKEN = 'nto-frwbpiremvehxl25t44fr7nzpe';
+/** Permanent production backend (Render). Always-on — not a temporary cloud-agent URL. */
+const DEFAULT_API_BASE = 'https://schedule-a-poll.onrender.com';
 
 function isCapacitorApp() {
   return window.Capacitor?.isNativePlatform?.() || /Capacitor/i.test(navigator.userAgent);
@@ -16,12 +12,29 @@ function normalizeApiBase(url) {
     .replace(/\?.*$/, '');
 }
 
+function isEphemeralAgentUrl(url) {
+  return /agent\.cvm\.dev/i.test(String(url || ''));
+}
+
+/** Drop expired Cursor cloud-agent URLs and always prefer the permanent Render host. */
+function migrateToPermanentServer() {
+  try {
+    const saved = normalizeApiBase(localStorage.getItem('apiBase') || '');
+    if (!saved || isEphemeralAgentUrl(saved)) {
+      localStorage.setItem('apiBase', DEFAULT_API_BASE);
+      localStorage.removeItem('ingressToken');
+    }
+  } catch {
+    // private mode / blocked storage
+  }
+}
+
 function getIngressToken() {
-  const saved = (localStorage.getItem('ingressToken') || '').trim();
-  if (saved) return saved;
+  // Render does not need an ingress token. Only keep a token if the user
+  // explicitly points at a temporary agent URL in settings.
   const base = getApiBase();
-  if (/agent\.cvm\.dev/i.test(base)) return DEFAULT_INGRESS_TOKEN;
-  return '';
+  if (!isEphemeralAgentUrl(base)) return '';
+  return (localStorage.getItem('ingressToken') || '').trim();
 }
 
 function setIngressToken(token) {
@@ -32,8 +45,9 @@ function setIngressToken(token) {
 
 function getApiBase() {
   if (!isCapacitorApp()) return '';
+  migrateToPermanentServer();
   const saved = normalizeApiBase(localStorage.getItem('apiBase') || '');
-  if (saved) return saved;
+  if (saved && !isEphemeralAgentUrl(saved)) return saved;
   return DEFAULT_API_BASE;
 }
 
@@ -44,7 +58,14 @@ function setApiBase(url) {
     const parsed = new URL(raw);
     const token = parsed.searchParams.get('_ingress_token');
     if (token) setIngressToken(token);
-    const value = normalizeApiBase(`${parsed.origin}${parsed.pathname}`.replace(/\/download\/apk\/?$/i, ''));
+    else if (!isEphemeralAgentUrl(parsed.origin)) setIngressToken('');
+
+    let value = normalizeApiBase(
+      `${parsed.origin}${parsed.pathname}`.replace(/\/download\/apk\/?$/i, '')
+    );
+    // Never keep expired temporary agent hosts as the default
+    if (isEphemeralAgentUrl(value)) value = DEFAULT_API_BASE;
+
     if (value) localStorage.setItem('apiBase', value);
     else localStorage.removeItem('apiBase');
     return;
@@ -52,7 +73,8 @@ function setApiBase(url) {
     // not a full URL
   }
 
-  const value = normalizeApiBase(raw);
+  let value = normalizeApiBase(raw);
+  if (isEphemeralAgentUrl(value)) value = DEFAULT_API_BASE;
   if (value) localStorage.setItem('apiBase', value);
   else localStorage.removeItem('apiBase');
 }
@@ -141,7 +163,7 @@ async function apiFetch(path, options = {}) {
     }
   }
 
-  // Browser fallback: include token in query + credentials for cookie.
+  // Browser fallback: include token in query only when needed (temporary agent hosts).
   let finalUrl = url;
   if (token) {
     finalUrl += (finalUrl.includes('?') ? '&' : '?') + `_ingress_token=${encodeURIComponent(token)}`;
@@ -170,7 +192,7 @@ async function readApiJson(res) {
   }
 
   if (/^\s*</.test(text) || /Redirecting to login|Cloud Agent Login|network token/i.test(text)) {
-    throw new Error('Unable to reach server — update the server URL / token in settings');
+    throw new Error('Unable to reach server — update the server URL in settings to https://schedule-a-poll.onrender.com');
   }
 
   try {
@@ -179,3 +201,6 @@ async function readApiJson(res) {
     throw new Error(res.ok ? 'Invalid response from server' : `Request failed (${res.status})`);
   }
 }
+
+// Run once on load for already-installed APKs that still have the old agent URL.
+migrateToPermanentServer();
