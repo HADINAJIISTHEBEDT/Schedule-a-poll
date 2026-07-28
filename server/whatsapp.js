@@ -937,7 +937,7 @@ function clearSessionData() {
     const store = getRemoteSessionStore();
     if (store) {
       store.delete({ session: SESSION_NAME }).catch((err) => {
-        console.warn('Failed to delete Firebase WhatsApp session:', err.message);
+        console.warn('Failed to delete Firestore WhatsApp session:', err.message);
       });
     }
   }
@@ -1028,7 +1028,7 @@ async function refreshRemoteSessionCache() {
     );
     return exists;
   } catch (err) {
-    console.warn('Could not check Firebase WhatsApp session:', err.message);
+    console.warn('Could not check Firestore WhatsApp session:', err.message);
     remoteSessionKnown = false;
     return false;
   }
@@ -1037,7 +1037,7 @@ async function refreshRemoteSessionCache() {
 function createAuthStrategy() {
   if (USE_REMOTE_AUTH) {
     const store = getRemoteSessionStore();
-    console.log('Using Firebase RemoteAuth (no Render Disk needed)');
+    console.log('Using Firestore RemoteAuth (no Disk / Storage upgrade needed)');
     return new RemoteAuth({
       clientId: SESSION_CLIENT_ID,
       dataPath: SESSION_PATH,

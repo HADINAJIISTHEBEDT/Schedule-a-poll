@@ -322,7 +322,7 @@ app.listen(PORT, HOST, async () => {
   }
   scheduler.start();
 
-  // Restore WhatsApp login (Firebase Storage on Render, or local disk)
+  // Restore WhatsApp login (Firestore on Render, or local disk)
   try {
     const dataDir = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
     fs.mkdirSync(dataDir, { recursive: true });
@@ -339,7 +339,7 @@ app.listen(PORT, HOST, async () => {
     } else {
       console.log(
         whatsapp.USE_REMOTE_AUTH
-          ? 'No Firebase WhatsApp session yet — scan QR once (saved to Firebase, no Disk needed)'
+          ? 'No Firestore WhatsApp session yet — scan QR once (saved to database, no Disk/Storage needed)'
           : 'No saved WhatsApp session yet — scan QR once to link permanently on this server'
       );
     }
