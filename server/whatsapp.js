@@ -12,8 +12,14 @@ const CHROME_CANDIDATES = [
   '/usr/bin/chromium-browser',
 ].filter(Boolean);
 
-const SESSION_PATH = path.join(__dirname, '..', 'data', 'whatsapp-session');
-const WEB_CACHE_PATH = path.join(__dirname, '..', 'data', 'wwebjs_cache');
+const SESSION_PATH = path.join(
+  process.env.DATA_DIR || path.join(__dirname, '..', 'data'),
+  'whatsapp-session'
+);
+const WEB_CACHE_PATH = path.join(
+  process.env.DATA_DIR || path.join(__dirname, '..', 'data'),
+  'wwebjs_cache'
+);
 const AUTH_MARKER_PATH = path.join(SESSION_PATH, '.authenticated');
 const PINNED_WEB_VERSION = '2.3000.1017054665';
 

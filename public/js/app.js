@@ -709,7 +709,7 @@ els.sendNowBtn.addEventListener('click', () => submitPoll(true));
 els.refreshPollsBtn.addEventListener('click', loadPolls);
 
 function openServerSettings() {
-  const base = getApiBase() || DEFAULT_API_BASE || 'http://localhost:3000';
+  const base = getApiBase() || DEFAULT_API_BASE || 'https://schedule-a-poll.onrender.com';
   els.serverUrlInput.value = base;
   els.serverOverlay.classList.remove('hidden');
 }
@@ -721,7 +721,7 @@ function closeServerSettings() {
 function saveServerSettings() {
   const url = els.serverUrlInput.value.trim();
   if (!url || !/^https?:\/\//i.test(url)) {
-    return showToast('Enter your PC address, e.g. http://localhost:3000 or http://192.168.1.10:3000', 'error');
+    return showToast('Enter https://schedule-a-poll.onrender.com', 'error');
   }
   setApiBase(url);
   closeServerSettings();

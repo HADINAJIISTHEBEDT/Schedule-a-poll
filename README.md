@@ -159,19 +159,14 @@ If you created a **Node** service by mistake, delete it and redeploy with **Dock
 
 Download the mobile app:
 
-**Web (local — recommended for saved WhatsApp login):**  
-http://localhost:3000
+**Web (Render — login saved like localhost):**  
+https://schedule-a-poll.onrender.com
 
-```bash
-npm install
-npm start
-```
-
-Open http://localhost:3000 → Connect WhatsApp → scan QR once. Login is saved in `data/whatsapp-session/` and restores automatically.
+Scan QR once. The WhatsApp session is stored on Render’s persistent disk (`/app/data/whatsapp-session`), so it restores after reloads the same way `data/whatsapp-session` does on localhost.
 
 **APK download:** https://schedule-a-poll.onrender.com/download/apk  
 
-In the APK, set Server to `http://localhost:3000` (emulator) or your PC LAN IP e.g. `http://192.168.1.10:3000`.
+In the APK, Server should be `https://schedule-a-poll.onrender.com`.
 
 Also works: `/download`, `/apk`, `/releases/poll-scheduler.apk` on the same host.
 

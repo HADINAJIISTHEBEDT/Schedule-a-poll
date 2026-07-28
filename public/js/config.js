@@ -1,9 +1,9 @@
 /**
- * Local-first backend (like `npm start` → http://localhost:3000).
- * WhatsApp login is saved on the SERVER disk under data/whatsapp-session/.
- * The APK only stores the server URL + a UI hint of who is linked.
+ * Production backend on Render — same saved-login behavior as localhost.
+ * WhatsApp session is stored on the Render disk at /app/data/whatsapp-session.
+ * localStorage keeps a UI hint of who is linked so the app restores after reload.
  */
-const DEFAULT_API_BASE = 'http://localhost:3000';
+const DEFAULT_API_BASE = 'https://schedule-a-poll.onrender.com';
 
 const STORAGE_KEYS = {
   apiBase: 'apiBase',
@@ -45,15 +45,15 @@ function isEphemeralAgentUrl(url) {
   return /agent\.cvm\.dev/i.test(String(url || ''));
 }
 
-function isRenderUrl(url) {
-  return /onrender\.com/i.test(String(url || ''));
+function isLocalhostUrl(url) {
+  return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(String(url || ''));
 }
 
-/** Prefer localhost / LAN. Drop expired cloud-agent hosts. Keep Render only if user chose it. */
-function migrateAwayFromExpiredHosts() {
+/** Always prefer the permanent Render host (same persistence as local disk). */
+function migrateToRenderServer() {
   try {
     const saved = normalizeApiBase(storageGet(STORAGE_KEYS.apiBase) || '');
-    if (isEphemeralAgentUrl(saved)) {
+    if (!saved || isEphemeralAgentUrl(saved) || isLocalhostUrl(saved)) {
       storageSet(STORAGE_KEYS.apiBase, DEFAULT_API_BASE);
       storageSet(STORAGE_KEYS.ingressToken, '');
     }
@@ -73,12 +73,12 @@ function setIngressToken(token) {
 }
 
 function getApiBase() {
-  // Browser on the same machine/server as the app → same-origin (true localhost feel)
+  // Browser on Render → same-origin (works exactly like opening localhost:3000)
   if (!isCapacitorApp()) return '';
 
-  migrateAwayFromExpiredHosts();
+  migrateToRenderServer();
   const saved = normalizeApiBase(storageGet(STORAGE_KEYS.apiBase) || '');
-  if (saved && !isEphemeralAgentUrl(saved)) return saved;
+  if (saved && !isEphemeralAgentUrl(saved) && !isLocalhostUrl(saved)) return saved;
   return DEFAULT_API_BASE;
 }
 
@@ -88,12 +88,12 @@ function setApiBase(url) {
     const parsed = new URL(raw);
     const token = parsed.searchParams.get('_ingress_token');
     if (token) setIngressToken(token);
-    else if (!isEphemeralAgentUrl(parsed.origin)) setIngressToken('');
+    else setIngressToken('');
 
     let value = normalizeApiBase(
       `${parsed.origin}${parsed.pathname}`.replace(/\/download\/apk\/?$/i, '')
     );
-    if (isEphemeralAgentUrl(value)) value = DEFAULT_API_BASE;
+    if (isEphemeralAgentUrl(value) || isLocalhostUrl(value)) value = DEFAULT_API_BASE;
 
     storageSet(STORAGE_KEYS.apiBase, value);
     return;
@@ -102,7 +102,7 @@ function setApiBase(url) {
   }
 
   let value = normalizeApiBase(raw);
-  if (isEphemeralAgentUrl(value)) value = DEFAULT_API_BASE;
+  if (isEphemeralAgentUrl(value) || isLocalhostUrl(value)) value = DEFAULT_API_BASE;
   storageSet(STORAGE_KEYS.apiBase, value);
 }
 
@@ -201,7 +201,7 @@ async function apiFetch(path, options = {}) {
         method,
         headers,
         connectTimeout: 60000,
-        readTimeout: 60000,
+        readTimeout: 90000,
       };
 
       if (options.body != null) {
@@ -224,7 +224,7 @@ async function apiFetch(path, options = {}) {
     } catch (err) {
       throw new Error(
         base
-          ? `Unable to reach server (${base}). Is npm start running on your PC?`
+          ? `Unable to reach server (${base}). ${err.message || ''}`.trim()
           : err.message || 'Unable to reach server'
       );
     }
@@ -244,7 +244,7 @@ async function apiFetch(path, options = {}) {
   } catch (err) {
     throw new Error(
       base
-        ? `Unable to reach server (${base}). For local use start the app with npm start, then open http://localhost:3000`
+        ? `Unable to reach server (${base}). Check the server URL in settings.`
         : err.message || 'Unable to reach server'
     );
   }
@@ -258,9 +258,7 @@ async function readApiJson(res) {
   }
 
   if (/^\s*</.test(text) || /Redirecting to login|Cloud Agent Login|network token/i.test(text)) {
-    throw new Error(
-      'Unable to reach server — set Server settings to your PC address (e.g. http://192.168.1.10:3000 or http://localhost:3000)'
-    );
+    throw new Error('Unable to reach server — set Server to https://schedule-a-poll.onrender.com');
   }
 
   try {
@@ -270,4 +268,4 @@ async function readApiJson(res) {
   }
 }
 
-migrateAwayFromExpiredHosts();
+migrateToRenderServer();

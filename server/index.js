@@ -295,18 +295,19 @@ app.listen(PORT, HOST, async () => {
   }
   scheduler.start();
 
-  // Restore WhatsApp login from persistent disk after deploy/restart
+  // Restore WhatsApp login from persistent disk after deploy/restart (Render disk = same as localhost data/)
   try {
-    const dataDir = path.join(__dirname, '..', 'data');
+    const dataDir = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
     fs.mkdirSync(dataDir, { recursive: true });
     fs.accessSync(dataDir, fs.constants.W_OK);
     console.log('Data directory writable:', dataDir);
+    console.log('WhatsApp session path:', path.join(dataDir, 'whatsapp-session'));
 
     if (whatsapp.hasSavedSession()) {
-      console.log('Found saved WhatsApp session — restoring automatically');
+      console.log('Found saved WhatsApp session — restoring automatically (like localhost)');
       whatsapp.warmupConnection();
     } else {
-      console.log('No saved WhatsApp session — scan QR once to link permanently');
+      console.log('No saved WhatsApp session yet — scan QR once to link permanently on this server');
     }
   } catch (err) {
     console.error('WhatsApp session restore / data dir check failed:', err.message);

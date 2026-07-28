@@ -31,10 +31,10 @@
     <div class="qr-overlay hidden" id="serverOverlay">
       <div class="qr-card">
         <h2>Server Connection</h2>
-        <p>Point the app at the PC where <code>npm start</code> is running (local WhatsApp login is saved there).</p>
-        <p class="hint-block">Examples: <code>http://localhost:3000</code> or <code>http://192.168.1.10:3000</code></p>
-        <input type="url" id="serverUrlInput" placeholder="http://localhost:3000" />
-        <p class="hint">Use your computer’s local address — not Render — so the WhatsApp login stays saved.</p>
+        <p>Use the permanent Render server — WhatsApp login is saved on disk there, same as localhost.</p>
+        <p class="hint-block">Default: <code>https://schedule-a-poll.onrender.com</code></p>
+        <input type="url" id="serverUrlInput" placeholder="https://schedule-a-poll.onrender.com" />
+        <p class="hint">Scan QR once. The next time you open the app it restores your saved login automatically.</p>
         <div class="form-actions" style="margin-top:16px">
           <button type="button" class="btn btn-primary" id="saveServerBtn">Save & Connect</button>
           <button type="button" class="btn btn-ghost" id="closeServerBtn">Cancel</button>
