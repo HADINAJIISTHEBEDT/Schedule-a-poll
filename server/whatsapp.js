@@ -5,7 +5,7 @@ const os = require('os');
 const path = require('path');
 const { humanLikeDelay, staggeredChatDelay, sleep, randomBetween } = require('./humanSend');
 const { isFirebaseConfigured, initFirebaseAdmin } = require('./firebase');
-const { isMongoConfigured, connectMongo } = require('./mongo');
+const { isMongoConfigured } = require('./mongo');
 const {
   FirebaseSessionStore,
   SESSION_CLIENT_ID,
