@@ -159,10 +159,39 @@ If you created a **Node** service by mistake, delete it and redeploy with **Dock
 
 Download the mobile app:
 
+## Render setup (same saved login as localhost)
+
+WhatsApp login is stored under `/app/data/whatsapp-session` — the same role as `./data` on localhost.  
+**Without a Disk, every deploy wipes the login.**
+
+### Add the Disk in the Render dashboard
+
+1. Open your service → left menu **Disks**
+2. Click **Add disk**
+3. Set:
+   - **Name:** `poll-data`
+   - **Mount path:** `/app/data`   ← must be exactly this
+   - **Size:** `1` GB
+4. Click **Add disk** (Render will redeploy)
+5. In **Environment**, confirm:
+   - `DATA_DIR` = `/app/data`
+   - `PUPPETEER_EXECUTABLE_PATH` = `/usr/bin/chromium`
+6. After deploy, open: `https://schedule-a-poll.onrender.com/api/health`  
+   You want `"dataDirWritable": true`. Then **Connect WhatsApp** and scan QR once.  
+   After that, `/api/health` should show `"hasSession": true`.
+
+### Check it matches localhost
+
+| Localhost | Render |
+|-----------|--------|
+| `./data/whatsapp-session` | `/app/data/whatsapp-session` |
+| Survives `npm start` restart | Survives deploy **only if Disk is mounted** |
+| Open `http://localhost:3000` | Open `https://schedule-a-poll.onrender.com` |
+
 **Web (Render — login saved like localhost):**  
 https://schedule-a-poll.onrender.com
 
-Scan QR once. The WhatsApp session is stored on Render’s persistent disk (`/app/data/whatsapp-session`), so it restores after reloads the same way `data/whatsapp-session` does on localhost.
+Scan QR once. Session is on the Disk; reloads restore it like localhost.
 
 **APK download:** https://schedule-a-poll.onrender.com/download/apk  
 

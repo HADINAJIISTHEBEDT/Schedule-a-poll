@@ -85,7 +85,29 @@ app.get('/api/download', (_req, res) => {
 
 app.get('/api/health', (_req, res) => {
   // Lightweight probe for Render — do not start Chromium here
-  res.json({ ok: true });
+  const dataDir = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
+  const sessionPath = path.join(dataDir, 'whatsapp-session');
+  let dataDirWritable = false;
+  try {
+    fs.mkdirSync(dataDir, { recursive: true });
+    fs.accessSync(dataDir, fs.constants.W_OK);
+    dataDirWritable = true;
+  } catch {
+    dataDirWritable = false;
+  }
+
+  res.json({
+    ok: true,
+    dataDir,
+    dataDirWritable,
+    sessionPath,
+    hasSession: whatsapp.hasSavedSession(),
+    waState: whatsapp.getStatus().state,
+    // If hasSession stays false after a successful QR on Render, the Disk is missing
+    hint: whatsapp.hasSavedSession()
+      ? 'WhatsApp login is saved on disk (like localhost)'
+      : 'No saved WhatsApp login yet — add Disk at /app/data, then Connect + scan QR once',
+  });
 });
 
 app.get('/api/status', async (_req, res) => {
