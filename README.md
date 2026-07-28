@@ -159,12 +159,12 @@ If you created a **Node** service by mistake, delete it and redeploy with **Dock
 
 Download the mobile app:
 
-## Render setup (same saved login as localhost — NO paid Disk)
+## Render setup (same saved login as localhost — NO Disk, NO Storage upgrade)
 
-WhatsApp login is saved to **Firebase Storage** (you already have Firebase env vars).  
-No Render Disk / plan upgrade needed.
+WhatsApp login is saved in **Firestore** (chunked in your existing database).  
+No Render Disk and no Firebase Storage plan needed.
 
-### Env vars you need (you mostly have these)
+### Env vars on Render
 
 | Key | Value |
 |-----|--------|
@@ -172,20 +172,17 @@ No Render Disk / plan upgrade needed.
 | `FIREBASE_PROJECT_ID` | `poll-generator-f6697` |
 | `FIREBASE_CLIENT_EMAIL` | your service account email |
 | `FIREBASE_PRIVATE_KEY` | full private key |
-| `FIREBASE_STORAGE_BUCKET` | `poll-generator-f6697.firebasestorage.app` |
+| `WA_REMOTE_AUTH` | `true` |
 | `PUPPETEER_EXECUTABLE_PATH` | `/usr/bin/chromium` |
 | `PUPPETEER_SKIP_CHROMIUM_DOWNLOAD` | `true` |
 | `HOST` | `0.0.0.0` |
 
-### One-time Firebase console step
-1. Open [Firebase Console](https://console.firebase.google.com/) → project `poll-generator-f6697`
-2. Enable **Storage** (Get started → start in production/test mode)
-3. Redeploy on Render
+You do **not** need `FIREBASE_STORAGE_BUCKET` or a paid Disk.
 
 ### After deploy
 1. Open https://schedule-a-poll.onrender.com/api/health — look for `"remoteAuth": true`
-2. Open the site → **Connect WhatsApp** → scan QR
-3. Keep the tab open **~1 minute** so the session uploads to Firebase
+2. **Connect WhatsApp** → scan QR
+3. Keep the tab open **~1 minute** so the session is written to Firestore
 4. Next visit / redeploy restores login automatically (like localhost)
 
 **Web:** https://schedule-a-poll.onrender.com  

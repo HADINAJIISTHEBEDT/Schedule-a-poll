@@ -1023,8 +1023,8 @@ async function refreshRemoteSessionCache() {
     store.setCachedExists(exists);
     console.log(
       exists
-        ? 'Found WhatsApp session in Firebase Storage — will restore like localhost'
-        : 'No WhatsApp session in Firebase yet — scan QR once to save it'
+        ? 'Found WhatsApp session in Firestore — will restore like localhost'
+        : 'No WhatsApp session in Firestore yet — scan QR once to save it'
     );
     return exists;
   } catch (err) {
@@ -1085,7 +1085,7 @@ function createClient() {
     remoteSessionKnown = true;
     getRemoteSessionStore()?.setCachedExists(true);
     markAuthenticated(connectedInfo || {});
-    console.log('WhatsApp login saved to Firebase (survives Render restarts without a Disk)');
+    console.log('WhatsApp login saved to Firestore (survives Render restarts without Disk/Storage)');
   });
 
   instance.on('qr', async (qr) => {

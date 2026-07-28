@@ -107,11 +107,11 @@ app.get('/api/health', (_req, res) => {
     waState: whatsapp.getStatus().state,
     hint: whatsapp.hasSavedSession()
       ? remoteAuth
-        ? 'WhatsApp login is saved in Firebase (no Disk needed)'
+        ? 'WhatsApp login is saved in Firestore (no Disk / Storage upgrade needed)'
         : 'WhatsApp login is saved on disk (like localhost)'
       : remoteAuth
-        ? 'No saved WhatsApp login in Firebase yet — Connect + scan QR once (wait ~1 min for backup)'
-        : 'No saved WhatsApp login yet — add Disk at /app/data OR enable Firebase RemoteAuth, then scan QR',
+        ? 'No saved WhatsApp login in Firestore yet — Connect + scan QR once (wait ~1 min for backup)'
+        : 'No saved WhatsApp login yet — enable Firebase (WA_REMOTE_AUTH) or use a Disk, then scan QR',
   });
 });
 
