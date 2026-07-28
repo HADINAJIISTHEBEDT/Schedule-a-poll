@@ -96,17 +96,22 @@ app.get('/api/health', (_req, res) => {
     dataDirWritable = false;
   }
 
+  const remoteAuth = Boolean(whatsapp.USE_REMOTE_AUTH);
   res.json({
     ok: true,
     dataDir,
     dataDirWritable,
     sessionPath,
+    remoteAuth,
     hasSession: whatsapp.hasSavedSession(),
     waState: whatsapp.getStatus().state,
-    // If hasSession stays false after a successful QR on Render, the Disk is missing
     hint: whatsapp.hasSavedSession()
-      ? 'WhatsApp login is saved on disk (like localhost)'
-      : 'No saved WhatsApp login yet — add Disk at /app/data, then Connect + scan QR once',
+      ? remoteAuth
+        ? 'WhatsApp login is saved in Firebase (no Disk needed)'
+        : 'WhatsApp login is saved on disk (like localhost)'
+      : remoteAuth
+        ? 'No saved WhatsApp login in Firebase yet — Connect + scan QR once (wait ~1 min for backup)'
+        : 'No saved WhatsApp login yet — add Disk at /app/data OR enable Firebase RemoteAuth, then scan QR',
   });
 });
 
@@ -317,19 +322,26 @@ app.listen(PORT, HOST, async () => {
   }
   scheduler.start();
 
-  // Restore WhatsApp login from persistent disk after deploy/restart (Render disk = same as localhost data/)
+  // Restore WhatsApp login (Firebase Storage on Render, or local disk)
   try {
     const dataDir = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
     fs.mkdirSync(dataDir, { recursive: true });
     fs.accessSync(dataDir, fs.constants.W_OK);
     console.log('Data directory writable:', dataDir);
-    console.log('WhatsApp session path:', path.join(dataDir, 'whatsapp-session'));
+
+    if (typeof whatsapp.refreshRemoteSessionCache === 'function') {
+      await whatsapp.refreshRemoteSessionCache();
+    }
 
     if (whatsapp.hasSavedSession()) {
       console.log('Found saved WhatsApp session — restoring automatically (like localhost)');
       whatsapp.warmupConnection();
     } else {
-      console.log('No saved WhatsApp session yet — scan QR once to link permanently on this server');
+      console.log(
+        whatsapp.USE_REMOTE_AUTH
+          ? 'No Firebase WhatsApp session yet — scan QR once (saved to Firebase, no Disk needed)'
+          : 'No saved WhatsApp session yet — scan QR once to link permanently on this server'
+      );
     }
   } catch (err) {
     console.error('WhatsApp session restore / data dir check failed:', err.message);

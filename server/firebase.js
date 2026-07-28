@@ -25,6 +25,10 @@ function initFirebaseAdmin() {
   }
 
   const projectId = firebaseConfig.projectId;
+  const storageBucket =
+    process.env.FIREBASE_STORAGE_BUCKET ||
+    firebaseConfig.storageBucket ||
+    `${projectId}.appspot.com`;
 
   if (process.env.FIREBASE_PRIVATE_KEY && process.env.FIREBASE_CLIENT_EMAIL) {
     initializeApp({
@@ -33,11 +37,13 @@ function initFirebaseAdmin() {
         clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
         privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
       }),
+      storageBucket,
     });
   } else if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
     initializeApp({
       credential: applicationDefault(),
       projectId,
+      storageBucket,
     });
   } else {
     console.warn('USE_FIREBASE is set but service account credentials are missing');
@@ -45,7 +51,7 @@ function initFirebaseAdmin() {
   }
 
   firestore = getFirestore();
-  console.log('Firebase Admin connected to project:', projectId);
+  console.log('Firebase Admin connected to project:', projectId, 'bucket:', storageBucket);
   return firestore;
 }
 

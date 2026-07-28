@@ -27,3 +27,7 @@ services:
         value: "0.0.0.0"
       - key: DATA_DIR
         value: /app/data
+      - key: FIREBASE_STORAGE_BUCKET
+        value: poll-generator-f6697.firebasestorage.app
+      - key: WA_REMOTE_AUTH
+        value: "true"

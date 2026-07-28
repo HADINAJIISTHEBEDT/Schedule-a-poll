@@ -1,8 +1,15 @@
-const { Client, LocalAuth, Poll } = require('whatsapp-web.js');
+const { Client, LocalAuth, RemoteAuth, Poll } = require('whatsapp-web.js');
 const qrcode = require('qrcode');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { humanLikeDelay, staggeredChatDelay, sleep, randomBetween } = require('./humanSend');
+const { isFirebaseConfigured, initFirebaseAdmin } = require('./firebase');
+const {
+  FirebaseSessionStore,
+  SESSION_CLIENT_ID,
+  SESSION_NAME,
+} = require('./waSessionStore');
 
 const CHROME_CANDIDATES = [
   process.env.PUPPETEER_EXECUTABLE_PATH,
@@ -12,16 +19,20 @@ const CHROME_CANDIDATES = [
   '/usr/bin/chromium-browser',
 ].filter(Boolean);
 
-const SESSION_PATH = path.join(
-  process.env.DATA_DIR || path.join(__dirname, '..', 'data'),
-  'whatsapp-session'
-);
-const WEB_CACHE_PATH = path.join(
-  process.env.DATA_DIR || path.join(__dirname, '..', 'data'),
-  'wwebjs_cache'
-);
-const AUTH_MARKER_PATH = path.join(SESSION_PATH, '.authenticated');
+const DATA_ROOT = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
+// RemoteAuth can use /tmp on Render (no paid Disk). LocalAuth still uses DATA_ROOT when Firebase is off.
+const USE_REMOTE_AUTH =
+  process.env.WA_REMOTE_AUTH === 'true' ||
+  (process.env.WA_REMOTE_AUTH !== 'false' && isFirebaseConfigured());
+const SESSION_PATH = USE_REMOTE_AUTH
+  ? path.join(os.tmpdir(), 'wwebjs_auth')
+  : path.join(DATA_ROOT, 'whatsapp-session');
+const WEB_CACHE_PATH = path.join(DATA_ROOT, 'wwebjs_cache');
+const AUTH_MARKER_PATH = path.join(DATA_ROOT, 'whatsapp-session', '.authenticated');
 const PINNED_WEB_VERSION = '2.3000.1017054665';
+
+let remoteSessionStore = null;
+let remoteSessionKnown = false;
 
 const PUPPETEER_ARGS = [
   '--no-sandbox',
@@ -913,9 +924,22 @@ async function refreshStatus() {
 
 function clearSessionData() {
   clearAuthMarker();
+  remoteSessionKnown = false;
+  getRemoteSessionStore()?.setCachedExists(false);
+
   if (fs.existsSync(SESSION_PATH)) {
     fs.rmSync(SESSION_PATH, { recursive: true, force: true });
-    console.log('WhatsApp session cleared from disk');
+    console.log('WhatsApp local session cache cleared from', SESSION_PATH);
+  }
+
+  // Also remove Firebase remote session when user disconnects
+  if (USE_REMOTE_AUTH) {
+    const store = getRemoteSessionStore();
+    if (store) {
+      store.delete({ session: SESSION_NAME }).catch((err) => {
+        console.warn('Failed to delete Firebase WhatsApp session:', err.message);
+      });
+    }
   }
 }
 
@@ -958,18 +982,74 @@ function ensureSessionDirs() {
 
 function clearBrowserLocks() {
   const lockFiles = ['SingletonLock', 'SingletonSocket', 'SingletonCookie'];
-  // LocalAuth stores Chrome profile under data/whatsapp-session/session
-  const profileDir = path.join(SESSION_PATH, 'session');
-  for (const file of lockFiles) {
-    const lockPath = path.join(profileDir, file);
-    if (fs.existsSync(lockPath)) {
-      try {
-        fs.rmSync(lockPath, { force: true });
-      } catch {
-        // ignore
+  // LocalAuth: data/whatsapp-session/session — RemoteAuth: tmp/wwebjs_auth/RemoteAuth-poll
+  const profileDirs = [
+    path.join(SESSION_PATH, 'session'),
+    path.join(SESSION_PATH, SESSION_NAME),
+    path.join(SESSION_PATH, 'RemoteAuth'),
+  ];
+  for (const profileDir of profileDirs) {
+    for (const file of lockFiles) {
+      const lockPath = path.join(profileDir, file);
+      if (fs.existsSync(lockPath)) {
+        try {
+          fs.rmSync(lockPath, { force: true });
+        } catch {
+          // ignore
+        }
       }
     }
   }
+}
+
+function getRemoteSessionStore() {
+  if (!USE_REMOTE_AUTH) return null;
+  if (remoteSessionStore) return remoteSessionStore;
+  initFirebaseAdmin();
+  fs.mkdirSync(SESSION_PATH, { recursive: true });
+  remoteSessionStore = new FirebaseSessionStore({ dataPath: SESSION_PATH });
+  return remoteSessionStore;
+}
+
+async function refreshRemoteSessionCache() {
+  if (!USE_REMOTE_AUTH) {
+    remoteSessionKnown = false;
+    return false;
+  }
+  try {
+    const store = getRemoteSessionStore();
+    const exists = await store.sessionExists({ session: SESSION_NAME });
+    remoteSessionKnown = exists;
+    store.setCachedExists(exists);
+    console.log(
+      exists
+        ? 'Found WhatsApp session in Firebase Storage — will restore like localhost'
+        : 'No WhatsApp session in Firebase yet — scan QR once to save it'
+    );
+    return exists;
+  } catch (err) {
+    console.warn('Could not check Firebase WhatsApp session:', err.message);
+    remoteSessionKnown = false;
+    return false;
+  }
+}
+
+function createAuthStrategy() {
+  if (USE_REMOTE_AUTH) {
+    const store = getRemoteSessionStore();
+    console.log('Using Firebase RemoteAuth (no Render Disk needed)');
+    return new RemoteAuth({
+      clientId: SESSION_CLIENT_ID,
+      dataPath: SESSION_PATH,
+      store,
+      backupSyncIntervalMs: 60_000,
+    });
+  }
+
+  console.log('Using LocalAuth under', SESSION_PATH);
+  return new LocalAuth({
+    dataPath: SESSION_PATH,
+  });
 }
 
 function createClient() {
@@ -981,10 +1061,7 @@ function createClient() {
   ensureSessionDirs();
 
   const instance = new Client({
-    authStrategy: new LocalAuth({
-      // Keep default folder name "session" so existing Render disk logins keep working
-      dataPath: SESSION_PATH,
-    }),
+    authStrategy: createAuthStrategy(),
     takeoverOnConflict: true,
     takeoverTimeoutMs: 5000,
     deviceName: 'Poll Scheduler',
@@ -1002,6 +1079,13 @@ function createClient() {
       protocolTimeout: 180000,
       args: PUPPETEER_ARGS,
     },
+  });
+
+  instance.on('remote_session_saved', () => {
+    remoteSessionKnown = true;
+    getRemoteSessionStore()?.setCachedExists(true);
+    markAuthenticated(connectedInfo || {});
+    console.log('WhatsApp login saved to Firebase (survives Render restarts without a Disk)');
   });
 
   instance.on('qr', async (qr) => {
@@ -1562,11 +1646,16 @@ function startConnection({ force = false, resetSession = false } = {}) {
 
 function hasSavedSession() {
   try {
+    // Firebase RemoteAuth (Render without Disk)
+    if (USE_REMOTE_AUTH && (remoteSessionKnown || getRemoteSessionStore()?.cachedExists)) {
+      return true;
+    }
+
     // Only count a real login. Creating a Chrome profile while waiting for QR
     // must NOT look like a saved session (that was breaking Render UI).
     if (fs.existsSync(AUTH_MARKER_PATH)) return true;
 
-    // Migration fallback for sessions linked before the marker existed.
+    // Migration fallback for sessions linked before the marker existed (LocalAuth).
     const waIdb = path.join(
       SESSION_PATH,
       'session',
@@ -1620,6 +1709,7 @@ module.exports = {
   initialize,
   startConnection,
   warmupConnection,
+  refreshRemoteSessionCache,
   disconnect,
   getStatus,
   refreshStatus,
@@ -1629,4 +1719,5 @@ module.exports = {
   isReady,
   hasSavedSession,
   on,
+  USE_REMOTE_AUTH,
 };

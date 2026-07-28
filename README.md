@@ -159,43 +159,39 @@ If you created a **Node** service by mistake, delete it and redeploy with **Dock
 
 Download the mobile app:
 
-## Render setup (same saved login as localhost)
+## Render setup (same saved login as localhost — NO paid Disk)
 
-WhatsApp login is stored under `/app/data/whatsapp-session` — the same role as `./data` on localhost.  
-**Without a Disk, every deploy wipes the login.**
+WhatsApp login is saved to **Firebase Storage** (you already have Firebase env vars).  
+No Render Disk / plan upgrade needed.
 
-### Add the Disk in the Render dashboard
+### Env vars you need (you mostly have these)
 
-1. Open your service → left menu **Disks**
-2. Click **Add disk**
-3. Set:
-   - **Name:** `poll-data`
-   - **Mount path:** `/app/data`   ← must be exactly this
-   - **Size:** `1` GB
-4. Click **Add disk** (Render will redeploy)
-5. In **Environment**, confirm:
-   - `DATA_DIR` = `/app/data`
-   - `PUPPETEER_EXECUTABLE_PATH` = `/usr/bin/chromium`
-6. After deploy, open: `https://schedule-a-poll.onrender.com/api/health`  
-   You want `"dataDirWritable": true`. Then **Connect WhatsApp** and scan QR once.  
-   After that, `/api/health` should show `"hasSession": true`.
+| Key | Value |
+|-----|--------|
+| `USE_FIREBASE` | `true` |
+| `FIREBASE_PROJECT_ID` | `poll-generator-f6697` |
+| `FIREBASE_CLIENT_EMAIL` | your service account email |
+| `FIREBASE_PRIVATE_KEY` | full private key |
+| `FIREBASE_STORAGE_BUCKET` | `poll-generator-f6697.firebasestorage.app` |
+| `PUPPETEER_EXECUTABLE_PATH` | `/usr/bin/chromium` |
+| `PUPPETEER_SKIP_CHROMIUM_DOWNLOAD` | `true` |
+| `HOST` | `0.0.0.0` |
 
-### Check it matches localhost
+### One-time Firebase console step
+1. Open [Firebase Console](https://console.firebase.google.com/) → project `poll-generator-f6697`
+2. Enable **Storage** (Get started → start in production/test mode)
+3. Redeploy on Render
 
-| Localhost | Render |
-|-----------|--------|
-| `./data/whatsapp-session` | `/app/data/whatsapp-session` |
-| Survives `npm start` restart | Survives deploy **only if Disk is mounted** |
-| Open `http://localhost:3000` | Open `https://schedule-a-poll.onrender.com` |
+### After deploy
+1. Open https://schedule-a-poll.onrender.com/api/health — look for `"remoteAuth": true`
+2. Open the site → **Connect WhatsApp** → scan QR
+3. Keep the tab open **~1 minute** so the session uploads to Firebase
+4. Next visit / redeploy restores login automatically (like localhost)
 
-**Web (Render — login saved like localhost):**  
-https://schedule-a-poll.onrender.com
+**Web:** https://schedule-a-poll.onrender.com  
+**APK:** https://schedule-a-poll.onrender.com/download/apk  
 
-Scan QR once. Session is on the Disk; reloads restore it like localhost.
-
-**APK download:** https://schedule-a-poll.onrender.com/download/apk  
-
-In the APK, Server should be `https://schedule-a-poll.onrender.com`.
+In the APK, Server = `https://schedule-a-poll.onrender.com`.
 
 Also works: `/download`, `/apk`, `/releases/poll-scheduler.apk` on the same host.
 
