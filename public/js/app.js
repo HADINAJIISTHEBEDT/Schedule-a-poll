@@ -235,6 +235,20 @@ function openQrOverlay() {
   }
 }
 
+function applySavedLoginHint() {
+  if (typeof getSavedWhatsAppLogin !== 'function') return;
+  const saved = getSavedWhatsAppLogin();
+  if (!saved.linked) return;
+  const profile = saved.profile;
+  const name = profile?.pushname || 'WhatsApp';
+  if (state.connectionState === 'disconnected' || state.connectionState === 'connecting') {
+    els.statusText.textContent = profile?.phone
+      ? `Restoring ${name} (+${profile.phone})…`
+      : `Restoring ${name}…`;
+    els.statusDot.className = 'status-dot connecting';
+  }
+}
+
 function updateConnectionUI({ state: connState, qr, connectedInfo, hasSession, restoring }) {
   const wasReady = state.connectionState === 'ready';
   state.connectionState = connState;
@@ -244,20 +258,39 @@ function updateConnectionUI({ state: connState, qr, connectedInfo, hasSession, r
     disconnected: 'Disconnected',
     connecting: 'Connecting...',
     qr: 'Scan QR Code',
-    authenticated: 'Syncing WhatsApp...',
+    authenticated: 'Linked on phone — opening in app...',
     ready: connectedInfo ? `Connected as ${connectedInfo.pushname}` : 'Connected',
     auth_failure: 'Auth failed',
   };
 
-  if ((connState === 'connecting' || connState === 'authenticated') && hasSession && !qr) {
-    // fall through — restoring handled below
-  }
+  const isRestoring =
+    restoring ||
+    ((connState === 'connecting' || connState === 'authenticated') && hasSession && !qr);
 
-  if (restoring) {
-    els.statusText.textContent =
-      connState === 'authenticated' ? 'Linked — finishing sync...' : 'Restoring saved login...';
+  if (isRestoring) {
+    const saved =
+      typeof getSavedWhatsAppLogin === 'function' ? getSavedWhatsAppLogin() : { profile: null };
+    if (connState === 'authenticated') {
+      els.statusText.textContent = connectedInfo?.pushname
+        ? `Linked as ${connectedInfo.pushname} — opening…`
+        : saved.profile?.pushname
+          ? `Linked as ${saved.profile.pushname} — opening…`
+          : 'Linked on phone — opening in app...';
+    } else {
+      els.statusText.textContent = saved.profile?.pushname
+        ? `Restoring ${saved.profile.pushname}…`
+        : 'Restoring saved login...';
+    }
   } else {
     els.statusText.textContent = labels[connState] || connState;
+  }
+
+  // Save login locally whenever WhatsApp is ready (server also keeps LocalAuth on disk)
+  if (connState === 'ready' && typeof saveWhatsAppLogin === 'function') {
+    saveWhatsAppLogin(connectedInfo);
+  }
+  if (connState === 'auth_failure' && typeof clearWhatsAppLogin === 'function') {
+    clearWhatsAppLogin();
   }
 
   if (connState === 'qr' && qr) {
@@ -266,10 +299,12 @@ function updateConnectionUI({ state: connState, qr, connectedInfo, hasSession, r
   } else if (connState === 'ready') {
     state.qrDismissed = false;
     hideQrOverlay();
-    if (!wasReady) showToast('WhatsApp connected!');
+    if (!wasReady) {
+      const name = connectedInfo?.pushname || 'WhatsApp';
+      showToast(`WhatsApp connected as ${name}`);
+    }
   } else if (connState === 'connecting' || connState === 'authenticated') {
-    // Only skip QR UI when truly restoring an existing login
-    if (restoring) {
+    if (isRestoring || connState === 'authenticated') {
       hideQrOverlay();
     } else if (!state.qrDismissed) {
       if (connState === 'connecting' && !qr && !lastQrUrl) {
@@ -324,6 +359,7 @@ async function connect() {
 
     if (status.state === 'ready') {
       await apiFetch('/api/disconnect', { method: 'POST' });
+      if (typeof clearWhatsAppLogin === 'function') clearWhatsAppLogin();
       state.searchResults = [];
       state.selectedChats.clear();
       state.selectedChatMeta.clear();
@@ -673,12 +709,8 @@ els.sendNowBtn.addEventListener('click', () => submitPoll(true));
 els.refreshPollsBtn.addEventListener('click', loadPolls);
 
 function openServerSettings() {
-  const base = getApiBase() || DEFAULT_API_BASE || '';
-  const token = typeof getIngressToken === 'function' ? getIngressToken() : '';
-  els.serverUrlInput.value =
-    token && /agent\.cvm\.dev/i.test(base)
-      ? `${base}/?_ingress_token=${token}`
-      : base || DEFAULT_API_BASE;
+  const base = getApiBase() || DEFAULT_API_BASE || 'http://localhost:3000';
+  els.serverUrlInput.value = base;
   els.serverOverlay.classList.remove('hidden');
 }
 
@@ -689,12 +721,12 @@ function closeServerSettings() {
 function saveServerSettings() {
   const url = els.serverUrlInput.value.trim();
   if (!url || !/^https?:\/\//i.test(url)) {
-    return showToast('Paste the full server link (including token if any)', 'error');
+    return showToast('Enter your PC address, e.g. http://localhost:3000 or http://192.168.1.10:3000', 'error');
   }
   setApiBase(url);
   closeServerSettings();
   showToast('Server saved');
-  fetchStatus();
+  bootstrapSession();
   loadPolls();
 }
 
@@ -708,12 +740,57 @@ if (!isCapacitorApp()) {
 
 renderOptions();
 setDefaultSchedule();
+applySavedLoginHint();
+
+async function bootstrapSession() {
+  applySavedLoginHint();
+  try {
+    const res = await apiFetch('/api/status');
+    const data = await readApiJson(res);
+    updateConnectionUI(data);
+
+    const saved =
+      typeof getSavedWhatsAppLogin === 'function' ? getSavedWhatsAppLogin() : { linked: false };
+    const waiting =
+      data.state === 'connecting' || data.state === 'qr' || data.state === 'authenticated';
+
+    if (waiting) {
+      pollStatus(true);
+      return;
+    }
+
+    // Auto-restore permanent WhatsApp login from server disk (+ localStorage hint)
+    if (data.state !== 'ready' && (data.hasSession || saved.linked)) {
+      updateConnectionUI({
+        state: 'connecting',
+        hasSession: true,
+        restoring: true,
+        connectedInfo: saved.profile || null,
+      });
+      try {
+        const connectRes = await apiFetch('/api/connect', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ force: false, reset: false }),
+        });
+        const connectData = await readApiJson(connectRes);
+        updateConnectionUI({ ...connectData, restoring: connectData.restoring ?? true });
+        pollStatus(true);
+        showToast('Restoring saved WhatsApp login…');
+      } catch {
+        // user can tap Connect
+      }
+    }
+  } catch {
+    applySavedLoginHint();
+  }
+}
+
 if (isCapacitorApp()) {
-  // Default cloud server is baked in — only open settings if user clears it
   if (!getApiBase()) {
     openServerSettings();
   } else {
-    fetchStatus();
+    bootstrapSession();
     if (typeof window.initFirebaseRealtime === 'function') {
       window.initFirebaseRealtime(renderPolls);
     } else {
@@ -721,7 +798,7 @@ if (isCapacitorApp()) {
     }
   }
 } else {
-  fetchStatus();
+  bootstrapSession();
   if (typeof window.initFirebaseRealtime === 'function') {
     window.initFirebaseRealtime(renderPolls);
   } else {

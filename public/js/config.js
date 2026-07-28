@@ -1,8 +1,37 @@
-/** Permanent production backend (Render). Always-on — not a temporary cloud-agent URL. */
-const DEFAULT_API_BASE = 'https://schedule-a-poll.onrender.com';
+/**
+ * Local-first backend (like `npm start` → http://localhost:3000).
+ * WhatsApp login is saved on the SERVER disk under data/whatsapp-session/.
+ * The APK only stores the server URL + a UI hint of who is linked.
+ */
+const DEFAULT_API_BASE = 'http://localhost:3000';
+
+const STORAGE_KEYS = {
+  apiBase: 'apiBase',
+  ingressToken: 'ingressToken',
+  waLinked: 'waLinked',
+  waProfile: 'waProfile',
+  lastReadyAt: 'waLastReadyAt',
+};
 
 function isCapacitorApp() {
   return window.Capacitor?.isNativePlatform?.() || /Capacitor/i.test(navigator.userAgent);
+}
+
+function storageGet(key) {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function storageSet(key, value) {
+  try {
+    if (value == null || value === '') localStorage.removeItem(key);
+    else localStorage.setItem(key, String(value));
+  } catch {
+    // private mode / blocked storage
+  }
 }
 
 function normalizeApiBase(url) {
@@ -16,44 +45,45 @@ function isEphemeralAgentUrl(url) {
   return /agent\.cvm\.dev/i.test(String(url || ''));
 }
 
-/** Drop expired Cursor cloud-agent URLs and always prefer the permanent Render host. */
-function migrateToPermanentServer() {
+function isRenderUrl(url) {
+  return /onrender\.com/i.test(String(url || ''));
+}
+
+/** Prefer localhost / LAN. Drop expired cloud-agent hosts. Keep Render only if user chose it. */
+function migrateAwayFromExpiredHosts() {
   try {
-    const saved = normalizeApiBase(localStorage.getItem('apiBase') || '');
-    if (!saved || isEphemeralAgentUrl(saved)) {
-      localStorage.setItem('apiBase', DEFAULT_API_BASE);
-      localStorage.removeItem('ingressToken');
+    const saved = normalizeApiBase(storageGet(STORAGE_KEYS.apiBase) || '');
+    if (isEphemeralAgentUrl(saved)) {
+      storageSet(STORAGE_KEYS.apiBase, DEFAULT_API_BASE);
+      storageSet(STORAGE_KEYS.ingressToken, '');
     }
   } catch {
-    // private mode / blocked storage
+    // ignore
   }
 }
 
 function getIngressToken() {
-  // Render does not need an ingress token. Only keep a token if the user
-  // explicitly points at a temporary agent URL in settings.
   const base = getApiBase();
   if (!isEphemeralAgentUrl(base)) return '';
-  return (localStorage.getItem('ingressToken') || '').trim();
+  return String(storageGet(STORAGE_KEYS.ingressToken) || '').trim();
 }
 
 function setIngressToken(token) {
-  const value = String(token || '').trim();
-  if (value) localStorage.setItem('ingressToken', value);
-  else localStorage.removeItem('ingressToken');
+  storageSet(STORAGE_KEYS.ingressToken, String(token || '').trim());
 }
 
 function getApiBase() {
+  // Browser on the same machine/server as the app → same-origin (true localhost feel)
   if (!isCapacitorApp()) return '';
-  migrateToPermanentServer();
-  const saved = normalizeApiBase(localStorage.getItem('apiBase') || '');
+
+  migrateAwayFromExpiredHosts();
+  const saved = normalizeApiBase(storageGet(STORAGE_KEYS.apiBase) || '');
   if (saved && !isEphemeralAgentUrl(saved)) return saved;
   return DEFAULT_API_BASE;
 }
 
 function setApiBase(url) {
   const raw = String(url || '').trim();
-  // Allow pasting a full download/apk link with ?_ingress_token=...
   try {
     const parsed = new URL(raw);
     const token = parsed.searchParams.get('_ingress_token');
@@ -63,11 +93,9 @@ function setApiBase(url) {
     let value = normalizeApiBase(
       `${parsed.origin}${parsed.pathname}`.replace(/\/download\/apk\/?$/i, '')
     );
-    // Never keep expired temporary agent hosts as the default
     if (isEphemeralAgentUrl(value)) value = DEFAULT_API_BASE;
 
-    if (value) localStorage.setItem('apiBase', value);
-    else localStorage.removeItem('apiBase');
+    storageSet(STORAGE_KEYS.apiBase, value);
     return;
   } catch {
     // not a full URL
@@ -75,8 +103,48 @@ function setApiBase(url) {
 
   let value = normalizeApiBase(raw);
   if (isEphemeralAgentUrl(value)) value = DEFAULT_API_BASE;
-  if (value) localStorage.setItem('apiBase', value);
-  else localStorage.removeItem('apiBase');
+  storageSet(STORAGE_KEYS.apiBase, value);
+}
+
+/** Persist linked WhatsApp profile in localStorage (UI restore hint). */
+function saveWhatsAppLogin(connectedInfo) {
+  storageSet(STORAGE_KEYS.waLinked, '1');
+  storageSet(STORAGE_KEYS.lastReadyAt, new Date().toISOString());
+  if (connectedInfo && typeof connectedInfo === 'object') {
+    try {
+      storageSet(
+        STORAGE_KEYS.waProfile,
+        JSON.stringify({
+          pushname: connectedInfo.pushname || null,
+          phone: connectedInfo.phone || null,
+          platform: connectedInfo.platform || null,
+        })
+      );
+    } catch {
+      // ignore
+    }
+  }
+}
+
+function clearWhatsAppLogin() {
+  storageSet(STORAGE_KEYS.waLinked, '');
+  storageSet(STORAGE_KEYS.waProfile, '');
+  storageSet(STORAGE_KEYS.lastReadyAt, '');
+}
+
+function getSavedWhatsAppLogin() {
+  const linked = storageGet(STORAGE_KEYS.waLinked) === '1';
+  let profile = null;
+  try {
+    profile = JSON.parse(storageGet(STORAGE_KEYS.waProfile) || 'null');
+  } catch {
+    profile = null;
+  }
+  return {
+    linked,
+    profile,
+    lastReadyAt: storageGet(STORAGE_KEYS.lastReadyAt) || null,
+  };
 }
 
 function apiUrl(path) {
@@ -125,7 +193,6 @@ async function apiFetch(path, options = {}) {
   const headers = buildNativeHeaders(options);
   const token = getIngressToken();
 
-  // Capacitor native HTTP can send Cookie headers (browser fetch cannot).
   const Http = window.Capacitor?.Plugins?.CapacitorHttp;
   if (isCapacitorApp() && Http?.request) {
     try {
@@ -157,13 +224,12 @@ async function apiFetch(path, options = {}) {
     } catch (err) {
       throw new Error(
         base
-          ? `Unable to reach server (${base}). ${err.message || ''}`.trim()
+          ? `Unable to reach server (${base}). Is npm start running on your PC?`
           : err.message || 'Unable to reach server'
       );
     }
   }
 
-  // Browser fallback: include token in query only when needed (temporary agent hosts).
   let finalUrl = url;
   if (token) {
     finalUrl += (finalUrl.includes('?') ? '&' : '?') + `_ingress_token=${encodeURIComponent(token)}`;
@@ -178,7 +244,7 @@ async function apiFetch(path, options = {}) {
   } catch (err) {
     throw new Error(
       base
-        ? `Unable to reach server (${base}). Check the server URL in settings.`
+        ? `Unable to reach server (${base}). For local use start the app with npm start, then open http://localhost:3000`
         : err.message || 'Unable to reach server'
     );
   }
@@ -192,7 +258,9 @@ async function readApiJson(res) {
   }
 
   if (/^\s*</.test(text) || /Redirecting to login|Cloud Agent Login|network token/i.test(text)) {
-    throw new Error('Unable to reach server — update the server URL in settings to https://schedule-a-poll.onrender.com');
+    throw new Error(
+      'Unable to reach server — set Server settings to your PC address (e.g. http://192.168.1.10:3000 or http://localhost:3000)'
+    );
   }
 
   try {
@@ -202,5 +270,4 @@ async function readApiJson(res) {
   }
 }
 
-// Run once on load for already-installed APKs that still have the old agent URL.
-migrateToPermanentServer();
+migrateAwayFromExpiredHosts();

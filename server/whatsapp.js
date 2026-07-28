@@ -271,7 +271,21 @@ async function tryFinalizeReady(instance) {
   if (!instance || connectionState === 'ready') return true;
 
   const connected = await isSessionConnected(instance);
-  if (!connected) return false;
+  if (!connected) {
+    // After QR scan WhatsApp may report authenticated before getState is CONNECTED
+    if (connectionState === 'authenticated') {
+      try {
+        const info = await readConnectedInfo(instance);
+        if (info?.phone || info?.pushname) {
+          connectedInfo = info;
+          markAuthenticated(info);
+        }
+      } catch {
+        // keep waiting
+      }
+    }
+    return false;
+  }
 
   connectionState = 'ready';
   connectingSince = 0;
@@ -1012,9 +1026,11 @@ function createClient() {
     markAuthenticated();
     startReadyCheck(instance);
     instance.sendPresenceAvailable().catch(() => {});
-    // Don't wait only for the ready event — cloud Chromium often skips it
+    // Phone already shows linked — promote to Connected in the app ASAP
+    setTimeout(() => tryFinalizeReady(instance).catch(() => {}), 300);
     setTimeout(() => tryFinalizeReady(instance).catch(() => {}), 1000);
-    setTimeout(() => tryFinalizeReady(instance).catch(() => {}), 5000);
+    setTimeout(() => tryFinalizeReady(instance).catch(() => {}), 3000);
+    setTimeout(() => tryFinalizeReady(instance).catch(() => {}), 8000);
     console.log('WhatsApp authenticated — session saved under', SESSION_PATH);
   });
 
