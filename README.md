@@ -159,31 +159,36 @@ If you created a **Node** service by mistake, delete it and redeploy with **Dock
 
 Download the mobile app:
 
-## Render setup (same saved login as localhost — NO Disk, NO Storage upgrade)
+## Render setup — free MongoDB Atlas (recommended)
 
-WhatsApp login is saved in **Firestore** (chunked in your existing database).  
-No Render Disk and no Firebase Storage plan needed.
+No Render Disk and no Firebase Storage upgrade. Login + contacts are saved in **MongoDB Atlas free M0**.
 
-### Env vars on Render
+### 1) Create free MongoDB (once)
+1. Go to https://www.mongodb.com/cloud/atlas/register
+2. Create a **FREE M0** cluster
+3. Database Access → Add user (username + password)
+4. Network Access → Add IP Address → **Allow Access from Anywhere** (`0.0.0.0/0`)
+5. Connect → Drivers → copy the URI  
+   Example: `mongodb+srv://USER:PASSWORD@cluster0.xxxxx.mongodb.net/pollscheduler?retryWrites=true&w=majority`
 
+### 2) Add on Render Environment
 | Key | Value |
 |-----|--------|
-| `USE_FIREBASE` | `true` |
-| `FIREBASE_PROJECT_ID` | `poll-generator-f6697` |
-| `FIREBASE_CLIENT_EMAIL` | your service account email |
-| `FIREBASE_PRIVATE_KEY` | full private key |
+| `MONGODB_URI` | your Atlas connection string |
 | `WA_REMOTE_AUTH` | `true` |
 | `PUPPETEER_EXECUTABLE_PATH` | `/usr/bin/chromium` |
 | `PUPPETEER_SKIP_CHROMIUM_DOWNLOAD` | `true` |
 | `HOST` | `0.0.0.0` |
 
-You do **not** need `FIREBASE_STORAGE_BUCKET` or a paid Disk.
+Keep your existing Firebase vars if you use them for polls.
 
-### After deploy
-1. Open https://schedule-a-poll.onrender.com/api/health — look for `"remoteAuth": true`
-2. **Connect WhatsApp** → scan QR
-3. Keep the tab open **~1 minute** so the session is written to Firestore
-4. Next visit / redeploy restores login automatically (like localhost)
+### 3) Deploy + link once
+1. Redeploy from GitHub `main`
+2. Open https://schedule-a-poll.onrender.com/api/health  
+   Expect `"sessionBackend":"mongodb"`
+3. **Connect WhatsApp** → scan QR
+4. Wait **~1 minute** (session backup) and search a contact once (contacts get saved)
+5. After restart/redeploy, login restores and contacts stay searchable
 
 **Web:** https://schedule-a-poll.onrender.com  
 **APK:** https://schedule-a-poll.onrender.com/download/apk  

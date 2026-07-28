@@ -5,11 +5,14 @@ const os = require('os');
 const path = require('path');
 const { humanLikeDelay, staggeredChatDelay, sleep, randomBetween } = require('./humanSend');
 const { isFirebaseConfigured, initFirebaseAdmin } = require('./firebase');
+const { isMongoConfigured, connectMongo } = require('./mongo');
 const {
   FirebaseSessionStore,
   SESSION_CLIENT_ID,
   SESSION_NAME,
 } = require('./waSessionStore');
+const { createMongoSessionStore } = require('./mongoSessionStore');
+const contactStore = require('./contactStore');
 
 const CHROME_CANDIDATES = [
   process.env.PUPPETEER_EXECUTABLE_PATH,
@@ -20,10 +23,12 @@ const CHROME_CANDIDATES = [
 ].filter(Boolean);
 
 const DATA_ROOT = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
-// RemoteAuth can use /tmp on Render (no paid Disk). LocalAuth still uses DATA_ROOT when Firebase is off.
-const USE_REMOTE_AUTH =
-  process.env.WA_REMOTE_AUTH === 'true' ||
-  (process.env.WA_REMOTE_AUTH !== 'false' && isFirebaseConfigured());
+const USE_MONGO_AUTH = isMongoConfigured();
+const USE_FIRESTORE_AUTH =
+  !USE_MONGO_AUTH &&
+  (process.env.WA_REMOTE_AUTH === 'true' ||
+    (process.env.WA_REMOTE_AUTH !== 'false' && isFirebaseConfigured()));
+const USE_REMOTE_AUTH = USE_MONGO_AUTH || USE_FIRESTORE_AUTH;
 const SESSION_PATH = USE_REMOTE_AUTH
   ? path.join(os.tmpdir(), 'wwebjs_auth')
   : path.join(DATA_ROOT, 'whatsapp-session');
@@ -33,6 +38,8 @@ const PINNED_WEB_VERSION = '2.3000.1017054665';
 
 let remoteSessionStore = null;
 let remoteSessionKnown = false;
+let remoteBackend = USE_MONGO_AUTH ? 'mongodb' : USE_FIRESTORE_AUTH ? 'firestore' : 'local';
+let contactsHydrated = false;
 
 const PUPPETEER_ARGS = [
   '--no-sandbox',
@@ -847,9 +854,11 @@ async function fetchAndCacheChats({ refresh = false, includeContacts = false } =
 
       if (includeContacts) {
         cachedContacts = (await fetchChatsDirect({ includeContacts: true })).filter((c) => !c.isGroup);
+        persistContactsToStore().catch(() => {});
         return mergeChatLists(cachedChats, cachedContacts);
       }
 
+      persistContactsToStore().catch(() => {});
       return cachedChats;
     } catch (err) {
       lastError = err;
@@ -925,22 +934,24 @@ async function refreshStatus() {
 function clearSessionData() {
   clearAuthMarker();
   remoteSessionKnown = false;
-  getRemoteSessionStore()?.setCachedExists(false);
+  contactsHydrated = false;
+  getRemoteSessionStore()?.setCachedExists?.(false);
 
   if (fs.existsSync(SESSION_PATH)) {
     fs.rmSync(SESSION_PATH, { recursive: true, force: true });
     console.log('WhatsApp local session cache cleared from', SESSION_PATH);
   }
 
-  // Also remove Firebase remote session when user disconnects
   if (USE_REMOTE_AUTH) {
     const store = getRemoteSessionStore();
     if (store) {
       store.delete({ session: SESSION_NAME }).catch((err) => {
-        console.warn('Failed to delete Firestore WhatsApp session:', err.message);
+        console.warn(`Failed to delete ${remoteBackend} WhatsApp session:`, err.message);
       });
     }
   }
+
+  contactStore.clearContacts().catch(() => {});
 }
 
 function markAuthenticated(info = {}) {
@@ -1003,11 +1014,23 @@ function clearBrowserLocks() {
 }
 
 function getRemoteSessionStore() {
+  return remoteSessionStore;
+}
+
+async function initRemoteSessionStore() {
   if (!USE_REMOTE_AUTH) return null;
   if (remoteSessionStore) return remoteSessionStore;
-  initFirebaseAdmin();
   fs.mkdirSync(SESSION_PATH, { recursive: true });
+
+  if (USE_MONGO_AUTH) {
+    remoteSessionStore = await createMongoSessionStore(SESSION_PATH);
+    remoteBackend = 'mongodb';
+    return remoteSessionStore;
+  }
+
+  initFirebaseAdmin();
   remoteSessionStore = new FirebaseSessionStore({ dataPath: SESSION_PATH });
+  remoteBackend = 'firestore';
   return remoteSessionStore;
 }
 
@@ -1017,31 +1040,58 @@ async function refreshRemoteSessionCache() {
     return false;
   }
   try {
-    const store = getRemoteSessionStore();
+    const store = await initRemoteSessionStore();
     const exists = await store.sessionExists({ session: SESSION_NAME });
     remoteSessionKnown = exists;
-    store.setCachedExists(exists);
+    store.setCachedExists?.(exists);
     console.log(
       exists
-        ? 'Found WhatsApp session in Firestore — will restore like localhost'
-        : 'No WhatsApp session in Firestore yet — scan QR once to save it'
+        ? `Found WhatsApp session in ${remoteBackend} — will restore like localhost`
+        : `No WhatsApp session in ${remoteBackend} yet — scan QR once to save it`
     );
     return exists;
   } catch (err) {
-    console.warn('Could not check Firestore WhatsApp session:', err.message);
+    console.warn(`Could not check ${remoteBackend} WhatsApp session:`, err.message);
     remoteSessionKnown = false;
     return false;
   }
 }
 
+async function hydrateContactsFromStore() {
+  if (contactsHydrated && ((cachedContacts && cachedContacts.length) || cachedChats.length)) {
+    return;
+  }
+  try {
+    const rows = await contactStore.loadContacts();
+    if (!rows.length) return;
+    cachedChats = rows.filter((r) => r.isGroup);
+    cachedContacts = rows.filter((r) => !r.isGroup);
+    chatsCacheTime = Date.now();
+    contactsHydrated = true;
+    console.log(
+      `Loaded ${rows.length} saved chats/contacts from ${USE_MONGO_AUTH ? 'MongoDB' : 'Firestore'}`
+    );
+  } catch (err) {
+    console.warn('Could not hydrate contacts from store:', err.message);
+  }
+}
+
+async function persistContactsToStore() {
+  const all = mergeChatLists(cachedChats || [], cachedContacts || []);
+  if (!all.length) return;
+  await contactStore.saveContacts(all);
+}
+
 function createAuthStrategy() {
   if (USE_REMOTE_AUTH) {
-    const store = getRemoteSessionStore();
-    console.log('Using Firestore RemoteAuth (no Disk / Storage upgrade needed)');
+    if (!remoteSessionStore) {
+      throw new Error('Remote session store not initialized — call refreshRemoteSessionCache first');
+    }
+    console.log(`Using RemoteAuth via ${remoteBackend} (free — no Disk/Storage upgrade)`);
     return new RemoteAuth({
       clientId: SESSION_CLIENT_ID,
       dataPath: SESSION_PATH,
-      store,
+      store: remoteSessionStore,
       backupSyncIntervalMs: 60_000,
     });
   }
@@ -1083,9 +1133,9 @@ function createClient() {
 
   instance.on('remote_session_saved', () => {
     remoteSessionKnown = true;
-    getRemoteSessionStore()?.setCachedExists(true);
+    getRemoteSessionStore()?.setCachedExists?.(true);
     markAuthenticated(connectedInfo || {});
-    console.log('WhatsApp login saved to Firestore (survives Render restarts without Disk/Storage)');
+    console.log(`WhatsApp login saved to ${remoteBackend} (survives Render restarts)`);
   });
 
   instance.on('qr', async (qr) => {
@@ -1151,9 +1201,11 @@ function createClient() {
     markAuthenticated(connectedInfo);
     startKeepalive(instance);
     emit('ready', connectedInfo);
-    fetchAndCacheChats({ refresh: false, includeContacts: false }).catch((err) => {
-      console.error('Chat cache warmup failed:', err.message);
-    });
+    fetchAndCacheChats({ refresh: true, includeContacts: true })
+      .then(() => persistContactsToStore())
+      .catch((err) => {
+        console.error('Chat/contact cache warmup failed:', err.message);
+      });
   });
 
   instance.on('change_state', (state) => {
@@ -1195,6 +1247,10 @@ function createClient() {
 }
 
 async function initialize({ force = false, resetSession = false } = {}) {
+  if (USE_REMOTE_AUTH) {
+    await initRemoteSessionStore();
+  }
+
   const connectingTimedOut =
     connectionState === 'connecting' &&
     connectingSince > 0 &&
@@ -1207,13 +1263,14 @@ async function initialize({ force = false, resetSession = false } = {}) {
     if (connectionState === 'connecting') return;
   }
 
-  // Only wipe session when explicitly requested (Disconnect). Never on deploy/retry.
+  // Always start from a clean ephemeral session folder for RemoteAuth extract,
+  // but never wipe the remote DB unless resetSession/user disconnect.
   if (resetSession) {
     clearSessionData();
   } else {
     clearBrowserLocks();
     if (hasSavedSession()) {
-      console.log('Restoring WhatsApp login from', SESSION_PATH);
+      console.log('Restoring WhatsApp login from', remoteBackend);
     }
   }
 
@@ -1323,42 +1380,39 @@ async function disconnect({ preserveState = false, userInitiated = false } = {})
 }
 
 async function searchChats({ query = '', filter = 'all', includeContacts = true } = {}) {
-  if (!client || connectionState !== 'ready') {
-    throw new Error('WhatsApp is not connected');
-  }
-
-  const connected = await isSessionConnected(client);
-  if (!connected) {
-    // Still allow cache search if WhatsApp briefly flaps — avoids hard fail toasts
-    const termEarly = query.trim().toLowerCase();
-    if (termEarly && cachedChats.length > 0) {
-      return searchCachedChats(termEarly, filter, includeContacts);
-    }
-    throw new Error('WhatsApp is not connected');
-  }
-
   const term = query.trim().toLowerCase();
-  if (term.length < 1) {
-    return [];
+  if (term.length < 1) return [];
+
+  // Prefer live WhatsApp search when connected
+  if (client && connectionState === 'ready') {
+    const connected = await isSessionConnected(client);
+    if (connected) {
+      try {
+        const live = await searchChatsDirect(term, filter, includeContacts);
+        if (live.length > 0) return live;
+        if (cachedChats.length > 0 || (cachedContacts && cachedContacts.length)) {
+          const cached = searchCachedChats(term, filter, includeContacts);
+          if (cached.length > 0) return cached;
+        }
+        return live;
+      } catch (err) {
+        console.error('Direct search failed:', err.message);
+        if (cachedChats.length > 0 || (cachedContacts && cachedContacts.length)) {
+          return searchCachedChats(term, filter, includeContacts);
+        }
+      }
+    }
   }
 
-  try {
-    const live = await searchChatsDirect(term, filter, includeContacts);
-    if (live.length > 0) return live;
-
-    // Live search returned nothing — try cache (may have older chats)
-    if (cachedChats.length > 0) {
-      const cached = searchCachedChats(term, filter, includeContacts);
-      if (cached.length > 0) return cached;
-    }
-    return live;
-  } catch (err) {
-    console.error('Direct search failed:', err.message);
-    if (cachedChats.length > 0 || (cachedContacts && cachedContacts.length > 0)) {
-      return searchCachedChats(term, filter, includeContacts);
-    }
-    throw new Error(err.message || 'Search failed — try again in a few seconds');
+  // Fallback: saved contacts/chats from MongoDB/Firestore (works while reconnecting)
+  await hydrateContactsFromStore();
+  if (cachedChats.length > 0 || (cachedContacts && cachedContacts.length > 0)) {
+    return searchCachedChats(term, filter, includeContacts);
   }
+
+  throw new Error(
+    'WhatsApp is not connected — tap Connect, scan QR once, then wait ~1 minute so login + contacts are saved'
+  );
 }
 
 async function getChats({ refresh = false, includeContacts = false } = {}) {
@@ -1710,6 +1764,7 @@ module.exports = {
   startConnection,
   warmupConnection,
   refreshRemoteSessionCache,
+  hydrateContactsFromStore,
   disconnect,
   getStatus,
   refreshStatus,
@@ -1720,4 +1775,5 @@ module.exports = {
   hasSavedSession,
   on,
   USE_REMOTE_AUTH,
+  remoteBackend: () => remoteBackend,
 };

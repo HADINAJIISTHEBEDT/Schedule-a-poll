@@ -20,10 +20,12 @@
     "firebase": "^12.16.0",
     "firebase-admin": "^14.2.0",
     "fs-extra": "^11.4.0",
+    "mongoose": "^9.8.1",
     "node-cron": "^3.0.3",
     "qrcode": "^1.5.4",
     "unzipper": "^0.12.5",
-    "whatsapp-web.js": "^1.26.0"
+    "whatsapp-web.js": "^1.26.0",
+    "wwebjs-mongo": "^1.1.0"
   },
   "devDependencies": {
     "@capacitor/android": "^6.2.0",

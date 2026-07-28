@@ -29,3 +29,6 @@ services:
         value: /app/data
       - key: WA_REMOTE_AUTH
         value: "true"
+      - key: MONGODB_URI
+        sync: false
+

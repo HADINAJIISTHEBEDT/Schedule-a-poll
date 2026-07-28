@@ -97,21 +97,24 @@ app.get('/api/health', (_req, res) => {
   }
 
   const remoteAuth = Boolean(whatsapp.USE_REMOTE_AUTH);
+  const backend =
+    typeof whatsapp.remoteBackend === 'function' ? whatsapp.remoteBackend() : 'local';
   res.json({
     ok: true,
     dataDir,
     dataDirWritable,
     sessionPath,
     remoteAuth,
+    sessionBackend: backend,
     hasSession: whatsapp.hasSavedSession(),
     waState: whatsapp.getStatus().state,
     hint: whatsapp.hasSavedSession()
-      ? remoteAuth
-        ? 'WhatsApp login is saved in Firestore (no Disk / Storage upgrade needed)'
-        : 'WhatsApp login is saved on disk (like localhost)'
-      : remoteAuth
-        ? 'No saved WhatsApp login in Firestore yet — Connect + scan QR once (wait ~1 min for backup)'
-        : 'No saved WhatsApp login yet — enable Firebase (WA_REMOTE_AUTH) or use a Disk, then scan QR',
+      ? `WhatsApp login is saved in ${backend}`
+      : backend === 'mongodb'
+        ? 'No MongoDB WhatsApp session yet — Connect + scan QR once (wait ~1 min)'
+        : backend === 'firestore'
+          ? 'No Firestore WhatsApp session yet — Connect + scan QR once (wait ~1 min)'
+          : 'No saved WhatsApp login yet — set MONGODB_URI (free Atlas) then scan QR',
   });
 });
 
@@ -322,7 +325,7 @@ app.listen(PORT, HOST, async () => {
   }
   scheduler.start();
 
-  // Restore WhatsApp login (Firestore on Render, or local disk)
+  // Restore WhatsApp login + contacts (MongoDB preferred, Firestore fallback)
   try {
     const dataDir = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
     fs.mkdirSync(dataDir, { recursive: true });
@@ -332,15 +335,22 @@ app.listen(PORT, HOST, async () => {
     if (typeof whatsapp.refreshRemoteSessionCache === 'function') {
       await whatsapp.refreshRemoteSessionCache();
     }
+    if (typeof whatsapp.hydrateContactsFromStore === 'function') {
+      await whatsapp.hydrateContactsFromStore();
+    }
 
     if (whatsapp.hasSavedSession()) {
       console.log('Found saved WhatsApp session — restoring automatically (like localhost)');
       whatsapp.warmupConnection();
     } else {
+      const backend =
+        typeof whatsapp.remoteBackend === 'function' ? whatsapp.remoteBackend() : 'local';
       console.log(
-        whatsapp.USE_REMOTE_AUTH
-          ? 'No Firestore WhatsApp session yet — scan QR once (saved to database, no Disk/Storage needed)'
-          : 'No saved WhatsApp session yet — scan QR once to link permanently on this server'
+        backend === 'mongodb'
+          ? 'No MongoDB WhatsApp session yet — scan QR once (login + contacts saved to Atlas free DB)'
+          : backend === 'firestore'
+            ? 'No Firestore WhatsApp session yet — scan QR once'
+            : 'No saved WhatsApp session — set MONGODB_URI on Render, then scan QR once'
       );
     }
   } catch (err) {
