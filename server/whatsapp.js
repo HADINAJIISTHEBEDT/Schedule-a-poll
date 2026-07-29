@@ -722,6 +722,16 @@ function finalizeSearchResults(results, term = '') {
       if (!term) return true;
       return namesMatch(r.name, r.id, term);
     });
+
+  const q = String(term || '')
+    .toLowerCase()
+    .trim();
+  // If WhatsApp contact label is exactly the query (e.g. "7ayety"), prefer those only
+  if (q) {
+    const exact = filtered.filter((r) => String(r.name || '').toLowerCase() === q);
+    if (exact.length) return dedupeSearchResults(exact).slice(0, 50);
+  }
+
   return dedupeSearchResults(filtered).slice(0, 50);
 }
 
