@@ -19,6 +19,33 @@ async function saveContacts(contacts = []) {
 
   if (!list.length) return 0;
 
+  const preferMongo = String(process.env.WA_SESSION_BACKEND || '').toLowerCase() === 'mongodb';
+
+  // Default: Firestore (user already has Firebase). Mongo only if preferred.
+  if (!preferMongo) {
+    try {
+      const db = getFirestore();
+      if (db) {
+        let batch = db.batch();
+        let ops = 0;
+        for (const doc of list) {
+          batch.set(db.collection(COLLECTION).doc(encodeURIComponent(doc.id)), doc, { merge: true });
+          ops += 1;
+          if (ops >= 400) {
+            await batch.commit();
+            batch = db.batch();
+            ops = 0;
+          }
+        }
+        if (ops) await batch.commit();
+        console.log(`Saved ${list.length} contacts/chats to Firestore`);
+        return list.length;
+      }
+    } catch (err) {
+      console.warn('Firestore contact save failed:', err.message);
+    }
+  }
+
   if (isMongoConfigured()) {
     try {
       await connectMongo();
@@ -31,7 +58,6 @@ async function saveContacts(contacts = []) {
           upsert: true,
         },
       }));
-      // bulkWrite in chunks
       for (let i = 0; i < ops.length; i += 500) {
         await col.bulkWrite(ops.slice(i, i + 500), { ordered: false });
       }
@@ -42,32 +68,56 @@ async function saveContacts(contacts = []) {
     }
   }
 
-  // Firestore fallback
-  try {
-    const db = getFirestore();
-    if (!db) return 0;
-    let batch = db.batch();
-    let ops = 0;
-    for (const doc of list) {
-      batch.set(db.collection(COLLECTION).doc(encodeURIComponent(doc.id)), doc, { merge: true });
-      ops += 1;
-      if (ops >= 400) {
-        await batch.commit();
-        batch = db.batch();
-        ops = 0;
-      }
-    }
-    if (ops) await batch.commit();
-    console.log(`Saved ${list.length} contacts/chats to Firestore`);
-    return list.length;
-  } catch (err) {
-    console.warn('Firestore contact save failed:', err.message);
-    return 0;
-  }
+  return 0;
 }
 
 async function loadContacts() {
-  if (isMongoConfigured()) {
+  // Prefer Mongo only when explicitly chosen; otherwise try Firestore first for this project
+  const preferMongo = String(process.env.WA_SESSION_BACKEND || '').toLowerCase() === 'mongodb';
+
+  if (preferMongo && isMongoConfigured()) {
+    try {
+      await connectMongo();
+      const mongoose = getMongoose();
+      const rows = await mongoose.connection.db
+        .collection(COLLECTION)
+        .find({})
+        .project({ _id: 0 })
+        .limit(5000)
+        .toArray();
+      if (rows.length) {
+        return rows.map((r) => ({
+          id: r.id,
+          name: r.name || r.id,
+          isGroup: Boolean(r.isGroup),
+        }));
+      }
+    } catch (err) {
+      console.warn('Mongo contact load failed:', err.message);
+    }
+  }
+
+  try {
+    const db = getFirestore();
+    if (db) {
+      const snap = await db.collection(COLLECTION).limit(5000).get();
+      if (!snap.empty) {
+        return snap.docs.map((d) => {
+          const r = d.data() || {};
+          return {
+            id: r.id || decodeURIComponent(d.id),
+            name: r.name || r.id || d.id,
+            isGroup: Boolean(r.isGroup),
+          };
+        });
+      }
+    }
+  } catch (err) {
+    console.warn('Firestore contact load failed:', err.message);
+  }
+
+  // Last resort: Mongo even if not preferred
+  if (!preferMongo && isMongoConfigured()) {
     try {
       await connectMongo();
       const mongoose = getMongoose();
@@ -87,22 +137,7 @@ async function loadContacts() {
     }
   }
 
-  try {
-    const db = getFirestore();
-    if (!db) return [];
-    const snap = await db.collection(COLLECTION).limit(5000).get();
-    return snap.docs.map((d) => {
-      const r = d.data() || {};
-      return {
-        id: r.id || decodeURIComponent(d.id),
-        name: r.name || r.id || d.id,
-        isGroup: Boolean(r.isGroup),
-      };
-    });
-  } catch (err) {
-    console.warn('Firestore contact load failed:', err.message);
-    return [];
-  }
+  return [];
 }
 
 async function clearContacts() {

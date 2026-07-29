@@ -159,36 +159,30 @@ If you created a **Node** service by mistake, delete it and redeploy with **Dock
 
 Download the mobile app:
 
-## Render setup — free MongoDB Atlas (recommended)
+## Render setup — Firebase Firestore (your existing database)
 
-No Render Disk and no Firebase Storage upgrade. Login + contacts are saved in **MongoDB Atlas free M0**.
+Login + contacts are saved in **Firestore**. No Disk and no Storage upgrade.
 
-### 1) Create free MongoDB (once)
-1. Go to https://www.mongodb.com/cloud/atlas/register
-2. Create a **FREE M0** cluster
-3. Database Access → Add user (username + password)
-4. Network Access → Add IP Address → **Allow Access from Anywhere** (`0.0.0.0/0`)
-5. Connect → Drivers → copy the URI  
-   Example: `mongodb+srv://USER:PASSWORD@cluster0.xxxxx.mongodb.net/pollscheduler?retryWrites=true&w=majority`
+### Env vars on Render (keep what you have + these)
 
-### 2) Add on Render Environment
 | Key | Value |
 |-----|--------|
-| `MONGODB_URI` | your Atlas connection string |
+| `USE_FIREBASE` | `true` |
+| `FIREBASE_PROJECT_ID` | `poll-generator-f6697` |
+| `FIREBASE_CLIENT_EMAIL` | full service account email |
+| `FIREBASE_PRIVATE_KEY` | full private key |
 | `WA_REMOTE_AUTH` | `true` |
 | `PUPPETEER_EXECUTABLE_PATH` | `/usr/bin/chromium` |
-| `PUPPETEER_SKIP_CHROMIUM_DOWNLOAD` | `true` |
 | `HOST` | `0.0.0.0` |
 
-Keep your existing Firebase vars if you use them for polls.
+Optional: `MONGODB_URI` only if you set `WA_SESSION_BACKEND=mongodb`. Default is Firestore.
 
-### 3) Deploy + link once
-1. Redeploy from GitHub `main`
-2. Open https://schedule-a-poll.onrender.com/api/health  
-   Expect `"sessionBackend":"mongodb"`
-3. **Connect WhatsApp** → scan QR
-4. Wait **~1 minute** (session backup) and search a contact once (contacts get saved)
-5. After restart/redeploy, login restores and contacts stay searchable
+### After deploy
+1. https://schedule-a-poll.onrender.com/api/health → `"sessionBackend":"firestore"`
+2. Connect WhatsApp → scan QR
+3. Wait ~15–30 seconds (session backup to Firestore)
+4. Search a contact once (contacts saved to Firestore `wa_contacts`)
+5. Redeploy/restart — login + contacts restore
 
 **Web:** https://schedule-a-poll.onrender.com  
 **APK:** https://schedule-a-poll.onrender.com/download/apk  

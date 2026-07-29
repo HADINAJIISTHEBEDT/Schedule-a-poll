@@ -111,10 +111,10 @@ app.get('/api/health', (_req, res) => {
     hint: whatsapp.hasSavedSession()
       ? `WhatsApp login is saved in ${backend}`
       : backend === 'mongodb'
-        ? 'No MongoDB WhatsApp session yet — Connect + scan QR once (wait ~1 min)'
+        ? 'No MongoDB WhatsApp session yet — Connect + scan QR once (wait ~15–30s)'
         : backend === 'firestore'
-          ? 'No Firestore WhatsApp session yet — Connect + scan QR once (wait ~1 min)'
-          : 'No saved WhatsApp login yet — set MONGODB_URI (free Atlas) then scan QR',
+          ? 'No Firestore WhatsApp session yet — Connect + scan QR once (wait ~15–30s)'
+          : 'No saved WhatsApp login yet — set Firebase env vars then scan QR',
   });
 });
 
@@ -325,7 +325,7 @@ app.listen(PORT, HOST, async () => {
   }
   scheduler.start();
 
-  // Restore WhatsApp login + contacts (MongoDB preferred, Firestore fallback)
+  // Restore WhatsApp login + contacts (Firestore by default)
   try {
     const dataDir = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
     fs.mkdirSync(dataDir, { recursive: true });
@@ -347,10 +347,10 @@ app.listen(PORT, HOST, async () => {
         typeof whatsapp.remoteBackend === 'function' ? whatsapp.remoteBackend() : 'local';
       console.log(
         backend === 'mongodb'
-          ? 'No MongoDB WhatsApp session yet — scan QR once (login + contacts saved to Atlas free DB)'
+          ? 'No MongoDB WhatsApp session yet — scan QR once'
           : backend === 'firestore'
-            ? 'No Firestore WhatsApp session yet — scan QR once'
-            : 'No saved WhatsApp session — set MONGODB_URI on Render, then scan QR once'
+            ? 'No Firestore WhatsApp session yet — scan QR once (saved to Firebase)'
+            : 'No saved WhatsApp session — set Firebase env vars on Render, then scan QR once'
       );
     }
   } catch (err) {

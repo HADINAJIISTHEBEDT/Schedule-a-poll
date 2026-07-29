@@ -8,6 +8,7 @@ const { isFirebaseConfigured, initFirebaseAdmin } = require('./firebase');
 const { isMongoConfigured } = require('./mongo');
 const {
   FirebaseSessionStore,
+  ProtectedRemoteStore,
   SESSION_CLIENT_ID,
   SESSION_NAME,
 } = require('./waSessionStore');
@@ -23,7 +24,9 @@ const CHROME_CANDIDATES = [
 ].filter(Boolean);
 
 const DATA_ROOT = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
-const USE_MONGO_AUTH = isMongoConfigured();
+// Prefer Firebase/Firestore (user's existing DB). Mongo only if explicitly requested.
+const preferMongo = String(process.env.WA_SESSION_BACKEND || '').toLowerCase() === 'mongodb';
+const USE_MONGO_AUTH = preferMongo && isMongoConfigured();
 const USE_FIRESTORE_AUTH =
   !USE_MONGO_AUTH &&
   (process.env.WA_REMOTE_AUTH === 'true' ||
@@ -945,9 +948,14 @@ function clearSessionData() {
   if (USE_REMOTE_AUTH) {
     const store = getRemoteSessionStore();
     if (store) {
-      store.delete({ session: SESSION_NAME }).catch((err) => {
-        console.warn(`Failed to delete ${remoteBackend} WhatsApp session:`, err.message);
-      });
+      // Allow delete only for explicit Disconnect / logout wipe
+      store.allowRemoteDelete?.(true);
+      store
+        .delete({ session: SESSION_NAME })
+        .catch((err) => {
+          console.warn(`Failed to delete ${remoteBackend} WhatsApp session:`, err.message);
+        })
+        .finally(() => store.allowRemoteDelete?.(false));
     }
   }
 
@@ -957,6 +965,7 @@ function clearSessionData() {
 function markAuthenticated(info = {}) {
   try {
     ensureSessionDirs();
+    fs.mkdirSync(path.dirname(AUTH_MARKER_PATH), { recursive: true });
     fs.writeFileSync(
       AUTH_MARKER_PATH,
       JSON.stringify(
@@ -1022,15 +1031,22 @@ async function initRemoteSessionStore() {
   if (remoteSessionStore) return remoteSessionStore;
   fs.mkdirSync(SESSION_PATH, { recursive: true });
 
+  let inner = null;
   if (USE_MONGO_AUTH) {
-    remoteSessionStore = await createMongoSessionStore(SESSION_PATH);
+    inner = await createMongoSessionStore(SESSION_PATH);
     remoteBackend = 'mongodb';
-    return remoteSessionStore;
+  } else {
+    const db = initFirebaseAdmin();
+    if (!db) {
+      throw new Error(
+        'Firebase Admin failed to start — set FIREBASE_CLIENT_EMAIL and FIREBASE_PRIVATE_KEY on Render'
+      );
+    }
+    inner = new FirebaseSessionStore({ dataPath: SESSION_PATH });
+    remoteBackend = 'firestore';
   }
 
-  initFirebaseAdmin();
-  remoteSessionStore = new FirebaseSessionStore({ dataPath: SESSION_PATH });
-  remoteBackend = 'firestore';
+  remoteSessionStore = new ProtectedRemoteStore(inner);
   return remoteSessionStore;
 }
 
@@ -1076,11 +1092,23 @@ async function hydrateContactsFromStore() {
   }
 }
 
+async function forceRemoteSessionBackup(instance = client) {
+  if (!USE_REMOTE_AUTH || !instance?.authStrategy) return;
+  const strategy = instance.authStrategy;
+  if (typeof strategy.storeRemoteSession !== 'function') return;
+  await strategy.storeRemoteSession({ emit: true });
+  remoteSessionKnown = true;
+  getRemoteSessionStore()?.setCachedExists?.(true);
+  markAuthenticated(connectedInfo || {});
+  console.log(`Forced WhatsApp session backup to ${remoteBackend}`);
+}
+
 async function persistContactsToStore() {
   const all = mergeChatLists(cachedChats || [], cachedContacts || []);
   if (!all.length) return;
   await contactStore.saveContacts(all);
 }
+
 
 function createAuthStrategy() {
   if (USE_REMOTE_AUTH) {
@@ -1201,6 +1229,15 @@ function createClient() {
     markAuthenticated(connectedInfo);
     startKeepalive(instance);
     emit('ready', connectedInfo);
+    // Don't wait for library's 60s first backup — push to Firebase ASAP
+    setTimeout(() => {
+      forceRemoteSessionBackup(instance).catch((err) => {
+        console.warn('Early Firebase session backup failed:', err.message);
+      });
+    }, 8000);
+    setTimeout(() => {
+      forceRemoteSessionBackup(instance).catch(() => {});
+    }, 25000);
     fetchAndCacheChats({ refresh: true, includeContacts: true })
       .then(() => persistContactsToStore())
       .catch((err) => {
@@ -1411,12 +1448,18 @@ async function searchChats({ query = '', filter = 'all', includeContacts = true 
   }
 
   throw new Error(
-    'WhatsApp is not connected — tap Connect, scan QR once, then wait ~1 minute so login + contacts are saved'
+    'WhatsApp is not connected — tap Connect, scan QR once, then wait ~15–30 seconds so login + contacts are saved'
   );
 }
 
 async function getChats({ refresh = false, includeContacts = false } = {}) {
   if (!client || connectionState !== 'ready') {
+    await hydrateContactsFromStore();
+    if (cachedChats.length || (cachedContacts && cachedContacts.length)) {
+      return includeContacts
+        ? mergeChatLists(cachedChats, cachedContacts || [])
+        : cachedChats;
+    }
     throw new Error('WhatsApp is not connected');
   }
 
@@ -1700,16 +1743,17 @@ function startConnection({ force = false, resetSession = false } = {}) {
 
 function hasSavedSession() {
   try {
-    // Firebase RemoteAuth (Render without Disk)
+    // Currently linked in this process
+    if (connectionState === 'ready' || connectionState === 'authenticated') return true;
+
+    // Firebase/Mongo RemoteAuth
     if (USE_REMOTE_AUTH && (remoteSessionKnown || getRemoteSessionStore()?.cachedExists)) {
       return true;
     }
 
-    // Only count a real login. Creating a Chrome profile while waiting for QR
-    // must NOT look like a saved session (that was breaking Render UI).
     if (fs.existsSync(AUTH_MARKER_PATH)) return true;
 
-    // Migration fallback for sessions linked before the marker existed (LocalAuth).
+    // LocalAuth migration fallback
     const waIdb = path.join(
       SESSION_PATH,
       'session',
@@ -1717,16 +1761,15 @@ function hasSavedSession() {
       'IndexedDB',
       'https_web.whatsapp.com_0.indexeddb.leveldb'
     );
-    const localStorage = path.join(
+    const localStorageDir = path.join(
       SESSION_PATH,
       'session',
       'Default',
       'Local Storage',
       'leveldb'
     );
-    if (!fs.existsSync(waIdb) || !fs.existsSync(localStorage)) return false;
+    if (!fs.existsSync(waIdb) || !fs.existsSync(localStorageDir)) return false;
 
-    // Fresh QR-only profiles are tiny; linked sessions keep more WA state.
     let total = 0;
     for (const file of fs.readdirSync(waIdb)) {
       try {

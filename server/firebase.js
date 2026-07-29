@@ -5,15 +5,14 @@ const firebaseConfig = require('./firebase-config');
 let firestore = null;
 
 function isFirebaseConfigured() {
-  const hasCredentials = Boolean(
-    process.env.FIREBASE_PRIVATE_KEY ||
-      process.env.GOOGLE_APPLICATION_CREDENTIALS ||
-      (process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PRIVATE_KEY)
+  const hasPair = Boolean(
+    process.env.FIREBASE_PRIVATE_KEY && process.env.FIREBASE_CLIENT_EMAIL
   );
+  const hasAdc = Boolean(process.env.GOOGLE_APPLICATION_CREDENTIALS);
 
   if (process.env.USE_FIREBASE === 'false') return false;
-  if (process.env.USE_FIREBASE === 'true') return hasCredentials;
-  return hasCredentials;
+  if (process.env.USE_FIREBASE === 'true') return hasPair || hasAdc;
+  return hasPair || hasAdc;
 }
 
 function initFirebaseAdmin() {
