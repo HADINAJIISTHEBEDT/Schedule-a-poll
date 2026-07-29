@@ -58,16 +58,40 @@ function isPhoneLike(text) {
   return false;
 }
 
-function pickBestName(names, fallback) {
-  const list = (names || []).map((n) => toNameString(n)).filter(Boolean);
-  const human = list.filter((n) => !isPhoneLike(n));
-  if (human.length) {
-    human.sort((a, b) => b.length - a.length);
-    return human[0];
+function pickBestName(names, fallback, query) {
+  const list = [];
+  const seen = new Set();
+  for (const n of names || []) {
+    const text = toNameString(n);
+    if (!text) continue;
+    const key = text.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    list.push(text);
   }
-  if (list.length) return list[0];
-  const fb = toNameString(fallback);
-  return fb || 'Unknown';
+  const human = list.filter((n) => !isPhoneLike(n));
+  const pool = human.length ? human : list;
+  if (!pool.length) return toNameString(fallback) || 'Unknown';
+
+  const q = toNameString(query).toLowerCase().trim();
+  if (q) {
+    // Prefer the label WhatsApp shows for this search (e.g. contact "7ayety")
+    const exact = pool.find((n) => n.toLowerCase() === q);
+    if (exact) return exact;
+
+    const tokenHits = pool
+      .filter((n) => tokenizeName(n).some((t) => t.toLowerCase() === q))
+      .sort((a, b) => a.length - b.length || a.localeCompare(b));
+    if (tokenHits.length) return tokenHits[0];
+
+    const contains = pool
+      .filter((n) => n.toLowerCase().includes(q))
+      .sort((a, b) => a.length - b.length || a.localeCompare(b));
+    if (contains.length) return contains[0];
+  }
+
+  // Preserve collector order: address-book name before pushname (do NOT prefer longest)
+  return pool[0];
 }
 
 /**
@@ -274,16 +298,37 @@ const BROWSER_SOURCE = `
     return false;
   }
 
-  function pickBestName(names, fallback) {
-    const list = (names || []).map((n) => toNameString(n)).filter(Boolean);
-    const human = list.filter((n) => !isPhoneLike(n));
-    if (human.length) {
-      human.sort((a, b) => b.length - a.length);
-      return human[0];
+  function pickBestName(names, fallback, query) {
+    const list = [];
+    const seen = {};
+    for (var i = 0; i < (names || []).length; i++) {
+      const text = toNameString(names[i]);
+      if (!text) continue;
+      const key = text.toLowerCase();
+      if (seen[key]) continue;
+      seen[key] = true;
+      list.push(text);
     }
-    if (list.length) return list[0];
-    const fb = toNameString(fallback);
-    return fb || 'Unknown';
+    const human = list.filter((n) => !isPhoneLike(n));
+    const pool = human.length ? human : list;
+    if (!pool.length) return toNameString(fallback) || 'Unknown';
+
+    const q = toNameString(query).toLowerCase().trim();
+    if (q) {
+      for (var e = 0; e < pool.length; e++) {
+        if (pool[e].toLowerCase() === q) return pool[e];
+      }
+      const tokenHits = pool
+        .filter((n) => tokenizeName(n).some((t) => t.toLowerCase() === q))
+        .sort((a, b) => a.length - b.length || a.localeCompare(b));
+      if (tokenHits.length) return tokenHits[0];
+      const contains = pool
+        .filter((n) => n.toLowerCase().includes(q))
+        .sort((a, b) => a.length - b.length || a.localeCompare(b));
+      if (contains.length) return contains[0];
+    }
+
+    return pool[0];
   }
 
   function foldArabizi(text) {

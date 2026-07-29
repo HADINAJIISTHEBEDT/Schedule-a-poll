@@ -170,6 +170,12 @@ function testArabiziMatch() {
   assert.ok(!namesMatch('7amety', '3@c.us', '7ayety'));
   assert.ok(!namesMatch('Bu Hadi', '4@c.us', '7ayety'));
   assert.ok(namesMatch(['+961 71 000', '7ayety'], '96171000@c.us', '7ayety'));
+  assert.strictEqual(
+    pickBestName(['Nouraty 7ayety', '7ayety', '+961 71'], 'x', '7ayety'),
+    '7ayety'
+  );
+  // Without a query, keep address-book-first order from collectors
+  assert.strictEqual(pickBestName(['7ayety', 'Nouraty 7ayety'], 'x'), '7ayety');
   assert.strictEqual(pickBestName(['+961 71 000 000', '7ayety'], 'x'), '7ayety');
   assert.strictEqual(preferBetterName('+961 71 000', '7ayety'), '7ayety');
   assert.strictEqual(foldArabizi('حياتي'), '7yaty');

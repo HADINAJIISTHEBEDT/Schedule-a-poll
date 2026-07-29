@@ -597,7 +597,7 @@ async function searchChatsDirect(term, filter = 'all', includeContacts = true) {
           seen.add(id);
           results.push({
             id,
-            name: pickBestName([name], id.split('@')[0]),
+            name: pickBestName([name], id.split('@')[0], rawNeedle),
             isGroup: Boolean(isGroup),
           });
           return true;
@@ -629,7 +629,7 @@ async function searchChatsDirect(term, filter = 'all', includeContacts = true) {
             }
 
             if (!namesMatch(nameCandidates, id, rawNeedle)) continue;
-            tryAdd(id, pickBestName(nameCandidates, id.split('@')[0]), isGroup);
+            tryAdd(id, pickBestName(nameCandidates, id.split('@')[0], rawNeedle), isGroup);
           }
         }
 
@@ -643,7 +643,7 @@ async function searchChatsDirect(term, filter = 'all', includeContacts = true) {
             if (!id || id.endsWith('@g.us')) continue;
             const names = collectContactNames(contact);
             if (!contactMatches(contact, names, id)) continue;
-            tryAdd(id, pickBestName(names, id.split('@')[0]), false);
+            tryAdd(id, pickBestName(names, id.split('@')[0], rawNeedle), false);
           }
         }
 
@@ -709,11 +709,19 @@ function searchCachedChats(term, filter, includeContacts) {
 }
 
 function finalizeSearchResults(results, term = '') {
-  const filtered = (results || []).filter((r) => {
-    if (!r?.id) return false;
-    if (!term) return true;
-    return namesMatch(r.name, r.id, term);
-  });
+  const filtered = (results || [])
+    .map((r) => {
+      const cleaned = sanitizeChat(r);
+      if (term) {
+        cleaned.name = pickBestName([cleaned.name, r.name], cleaned.id.split('@')[0], term);
+      }
+      return cleaned;
+    })
+    .filter((r) => {
+      if (!r?.id) return false;
+      if (!term) return true;
+      return namesMatch(r.name, r.id, term);
+    });
   return dedupeSearchResults(filtered).slice(0, 50);
 }
 
