@@ -85,8 +85,14 @@ app.get('/api/download', (_req, res) => {
 
 app.get('/api/health', (_req, res) => {
   // Lightweight probe for Render — do not start Chromium here
-  const dataDir = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
-  const sessionPath = path.join(dataDir, 'whatsapp-session');
+  const dataDir =
+    typeof whatsapp.getDataRoot === 'function'
+      ? whatsapp.getDataRoot()
+      : process.env.DATA_DIR || path.join(__dirname, '..', 'data');
+  const sessionPath =
+    typeof whatsapp.getSessionPath === 'function'
+      ? whatsapp.getSessionPath()
+      : path.join(dataDir, 'whatsapp-session');
   let dataDirWritable = false;
   try {
     fs.mkdirSync(dataDir, { recursive: true });
@@ -113,12 +119,12 @@ app.get('/api/health', (_req, res) => {
     contactsCached: contactStats.contactsCached || 0,
     chatsCached: contactStats.chatsCached || 0,
     hint: whatsapp.hasSavedSession()
-      ? `WhatsApp login is saved in ${backend}`
-      : backend === 'mongodb'
-        ? 'No MongoDB WhatsApp session yet — Connect + scan QR once (wait ~15–30s)'
-        : backend === 'firestore'
-          ? 'No Firestore WhatsApp session yet — Connect + scan QR once (wait ~15–30s)'
-          : 'No saved WhatsApp login yet — set Firebase env vars then scan QR',
+      ? `WhatsApp login is saved in ${backend} (${sessionPath})`
+      : backend === 'local'
+        ? 'No saved WhatsApp login yet — Connect + scan QR once (saves under data/whatsapp-session like localhost)'
+        : backend === 'mongodb'
+          ? 'No MongoDB WhatsApp session yet — Connect + scan QR once (wait ~15–30s)'
+          : 'No Firestore WhatsApp session yet — Connect + scan QR once (wait ~15–30s)',
   });
 });
 
@@ -329,12 +335,22 @@ app.listen(PORT, HOST, async () => {
   }
   scheduler.start();
 
-  // Restore WhatsApp login + contacts (Firestore by default)
+  // Restore WhatsApp login + contacts from disk (LocalAuth) — same as localhost
   try {
-    const dataDir = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
+    const dataDir =
+      typeof whatsapp.getDataRoot === 'function'
+        ? whatsapp.getDataRoot()
+        : process.env.DATA_DIR || path.join(__dirname, '..', 'data');
     fs.mkdirSync(dataDir, { recursive: true });
     fs.accessSync(dataDir, fs.constants.W_OK);
     console.log('Data directory writable:', dataDir);
+    if (typeof whatsapp.getSessionPath === 'function') {
+      console.log('WhatsApp session path:', whatsapp.getSessionPath());
+    }
+    console.log(
+      'Session backend:',
+      typeof whatsapp.remoteBackend === 'function' ? whatsapp.remoteBackend() : 'local'
+    );
 
     if (typeof whatsapp.refreshRemoteSessionCache === 'function') {
       await whatsapp.refreshRemoteSessionCache();

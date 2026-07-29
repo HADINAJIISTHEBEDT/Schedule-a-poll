@@ -81,6 +81,7 @@ function testBackendPreference() {
   const prevEmail = process.env.FIREBASE_CLIENT_EMAIL;
   const prevKey = process.env.FIREBASE_PRIVATE_KEY;
   const prevUse = process.env.USE_FIREBASE;
+  const prevRemote = process.env.WA_REMOTE_AUTH;
 
   try {
     process.env.USE_FIREBASE = 'true';
@@ -88,20 +89,29 @@ function testBackendPreference() {
     process.env.FIREBASE_PRIVATE_KEY = 'key';
     process.env.MONGODB_URI = 'mongodb+srv://x';
     delete process.env.WA_SESSION_BACKEND;
+    delete process.env.WA_REMOTE_AUTH;
 
     const { isFirebaseConfigured } = require('../server/firebase');
     const { isMongoConfigured } = require('../server/mongo');
     assert.strictEqual(isFirebaseConfigured(), true);
     assert.strictEqual(isMongoConfigured(), true);
 
+    // Default = LocalAuth (like localhost). Remote only when WA_REMOTE_AUTH=true.
     const preferMongo = String(process.env.WA_SESSION_BACKEND || '').toLowerCase() === 'mongodb';
-    const USE_MONGO_AUTH = preferMongo && isMongoConfigured();
+    const remoteAuthRequested = String(process.env.WA_REMOTE_AUTH || '').toLowerCase() === 'true';
+    const USE_MONGO_AUTH = remoteAuthRequested && preferMongo && isMongoConfigured();
     const USE_FIRESTORE_AUTH =
-      !USE_MONGO_AUTH &&
-      (process.env.WA_REMOTE_AUTH === 'true' ||
-        (process.env.WA_REMOTE_AUTH !== 'false' && isFirebaseConfigured()));
-    assert.strictEqual(USE_MONGO_AUTH, false, 'must prefer Firestore by default');
-    assert.strictEqual(USE_FIRESTORE_AUTH, true);
+      remoteAuthRequested && !USE_MONGO_AUTH && isFirebaseConfigured();
+    assert.strictEqual(USE_MONGO_AUTH, false);
+    assert.strictEqual(USE_FIRESTORE_AUTH, false, 'default must be LocalAuth');
+
+    process.env.WA_REMOTE_AUTH = 'true';
+    const remoteAuthRequested2 = String(process.env.WA_REMOTE_AUTH || '').toLowerCase() === 'true';
+    const USE_FIRESTORE_AUTH2 =
+      remoteAuthRequested2 &&
+      !(String(process.env.WA_SESSION_BACKEND || '').toLowerCase() === 'mongodb' && isMongoConfigured()) &&
+      isFirebaseConfigured();
+    assert.strictEqual(USE_FIRESTORE_AUTH2, true, 'explicit WA_REMOTE_AUTH=true uses Firestore');
 
     process.env.WA_SESSION_BACKEND = 'mongodb';
     const preferMongo2 = String(process.env.WA_SESSION_BACKEND || '').toLowerCase() === 'mongodb';
@@ -117,6 +127,8 @@ function testBackendPreference() {
     else process.env.FIREBASE_PRIVATE_KEY = prevKey;
     if (prevUse === undefined) delete process.env.USE_FIREBASE;
     else process.env.USE_FIREBASE = prevUse;
+    if (prevRemote === undefined) delete process.env.WA_REMOTE_AUTH;
+    else process.env.WA_REMOTE_AUTH = prevRemote;
   }
   console.log('OK backend preference');
 }
@@ -128,6 +140,30 @@ function testContactDocId() {
   assert.ok(!docId.includes('/'));
   assert.strictEqual(decodeURIComponent(docId), id);
   console.log('OK contact doc id');
+}
+
+async function testDiskContactPersist() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-contacts-'));
+  const prevData = process.env.DATA_DIR;
+  process.env.DATA_DIR = tmp;
+  try {
+    delete require.cache[require.resolve('../server/contactStore')];
+    const store = require('../server/contactStore');
+    const n = await store.saveContacts([
+      { id: '96170800643@c.us', name: '7ayety', isGroup: false },
+      { id: 'group@g.us', name: 'Family', isGroup: true },
+    ]);
+    assert.ok(n >= 2);
+    const loaded = await store.loadContacts();
+    assert.strictEqual(loaded.length, 2);
+    assert.ok(loaded.some((c) => c.name === '7ayety'));
+    assert.ok(fs.existsSync(path.join(tmp, 'wa_contacts.json')));
+  } finally {
+    if (prevData === undefined) delete process.env.DATA_DIR;
+    else process.env.DATA_DIR = prevData;
+    delete require.cache[require.resolve('../server/contactStore')];
+  }
+  console.log('OK disk contact persist');
 }
 
 function testMergeChatLists() {
@@ -199,6 +235,7 @@ function testArabiziMatch() {
   testSessionMetaUsable();
   testBackendPreference();
   testContactDocId();
+  await testDiskContactPersist();
   testMergeChatLists();
   testArabiziMatch();
   console.log('All local session-store tests passed');

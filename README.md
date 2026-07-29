@@ -159,30 +159,34 @@ If you created a **Node** service by mistake, delete it and redeploy with **Dock
 
 Download the mobile app:
 
-## Render setup — Firebase Firestore (your existing database)
+## Render setup — same as localhost (Disk LocalAuth)
 
-Login + contacts are saved in **Firestore**. No Disk and no Storage upgrade.
+WhatsApp login is stored on disk, same layout as local:
 
-### Env vars on Render (keep what you have + these)
+| Localhost | Render |
+|-----------|--------|
+| `./data/whatsapp-session` | `/app/data/whatsapp-session` |
+| `./data/wa_contacts.json` | `/app/data/wa_contacts.json` |
+
+**You need a Render Disk** mounted at `/app/data` (Blueprint already defines this). Without it, every deploy wipes the login.
+
+### Env vars on Render
 
 | Key | Value |
 |-----|--------|
-| `USE_FIREBASE` | `true` |
-| `FIREBASE_PROJECT_ID` | `poll-generator-f6697` |
-| `FIREBASE_CLIENT_EMAIL` | full service account email |
-| `FIREBASE_PRIVATE_KEY` | full private key |
-| `WA_REMOTE_AUTH` | `true` |
+| `DATA_DIR` | `/app/data` |
+| `WA_REMOTE_AUTH` | `false` |
 | `PUPPETEER_EXECUTABLE_PATH` | `/usr/bin/chromium` |
 | `HOST` | `0.0.0.0` |
 
-Optional: `MONGODB_URI` only if you set `WA_SESSION_BACKEND=mongodb`. Default is Firestore.
+Firebase env vars are optional (extra contact copy / polls). They must **not** force RemoteAuth — keep `WA_REMOTE_AUTH=false`.
 
 ### After deploy
-1. https://schedule-a-poll.onrender.com/api/health → `"sessionBackend":"firestore"`
-2. Connect WhatsApp → scan QR
-3. Wait ~15–30 seconds (session backup to Firestore)
-4. Search a contact once (contacts saved to Firestore `wa_contacts`)
-5. Redeploy/restart — login + contacts restore
+1. https://schedule-a-poll.onrender.com/api/health → `"sessionBackend":"local"`, `"dataDirWritable":true`
+2. Connect WhatsApp → scan QR once
+3. `/api/health` should show `"hasSession":true`
+4. Search a contact — saved to `/app/data/wa_contacts.json`
+5. Redeploy/restart — login + contacts restore from Disk (like localhost)
 
 **Web:** https://schedule-a-poll.onrender.com  
 **APK:** https://schedule-a-poll.onrender.com/download/apk  

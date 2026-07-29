@@ -33,13 +33,13 @@ const CHROME_CANDIDATES = [
 ].filter(Boolean);
 
 const DATA_ROOT = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
-// Prefer Firebase/Firestore (user's existing DB). Mongo only if explicitly requested.
+// Default = LocalAuth on disk (same as localhost: data/whatsapp-session).
+// RemoteAuth (Firestore/Mongo) only when WA_REMOTE_AUTH=true explicitly.
 const preferMongo = String(process.env.WA_SESSION_BACKEND || '').toLowerCase() === 'mongodb';
-const USE_MONGO_AUTH = preferMongo && isMongoConfigured();
+const remoteAuthRequested = String(process.env.WA_REMOTE_AUTH || '').toLowerCase() === 'true';
+const USE_MONGO_AUTH = remoteAuthRequested && preferMongo && isMongoConfigured();
 const USE_FIRESTORE_AUTH =
-  !USE_MONGO_AUTH &&
-  (process.env.WA_REMOTE_AUTH === 'true' ||
-    (process.env.WA_REMOTE_AUTH !== 'false' && isFirebaseConfigured()));
+  remoteAuthRequested && !USE_MONGO_AUTH && isFirebaseConfigured();
 const USE_REMOTE_AUTH = USE_MONGO_AUTH || USE_FIRESTORE_AUTH;
 const SESSION_PATH = USE_REMOTE_AUTH
   ? path.join(os.tmpdir(), 'wwebjs_auth')
@@ -991,9 +991,7 @@ async function hydrateContactsFromStore() {
     cachedContacts = rows.filter((r) => !r.isGroup);
     chatsCacheTime = Date.now();
     contactsHydrated = true;
-    console.log(
-      `Loaded ${rows.length} saved chats/contacts from ${USE_MONGO_AUTH ? 'MongoDB' : 'Firestore'}`
-    );
+    console.log(`Loaded ${rows.length} saved chats/contacts from store`);
   } catch (err) {
     console.warn('Could not hydrate contacts from store:', err.message);
   }
@@ -1018,12 +1016,12 @@ async function persistContactsToStore() {
   }
   const saved = await contactStore.saveContacts(all);
   if (!saved) {
-    console.warn('Contact persist returned 0 — check Firebase Admin credentials');
+    console.warn('Contact persist returned 0 — check disk / Firebase credentials');
   }
   return saved;
 }
 
-/** Merge live search / fetch hits into memory and write them to Firestore. */
+/** Merge live search / fetch hits into memory and persist (disk + optional cloud). */
 function rememberChats(items = []) {
   const list = (items || []).map((c) => sanitizeChat(c)).filter((c) => c.id);
   if (!list.length) return;
@@ -1070,7 +1068,7 @@ function createAuthStrategy() {
     if (!remoteSessionStore) {
       throw new Error('Remote session store not initialized — call refreshRemoteSessionCache first');
     }
-    console.log(`Using RemoteAuth via ${remoteBackend} (free — no Disk/Storage upgrade)`);
+    console.log(`Using RemoteAuth via ${remoteBackend}`);
     return new RemoteAuth({
       clientId: SESSION_CLIENT_ID,
       dataPath: SESSION_PATH,
@@ -1079,10 +1077,18 @@ function createAuthStrategy() {
     });
   }
 
-  console.log('Using LocalAuth under', SESSION_PATH);
+  console.log('Using LocalAuth under', SESSION_PATH, '(same layout as localhost)');
   return new LocalAuth({
     dataPath: SESSION_PATH,
   });
+}
+
+function getSessionPath() {
+  return SESSION_PATH;
+}
+
+function getDataRoot() {
+  return DATA_ROOT;
 }
 
 function createClient() {
@@ -1816,6 +1822,8 @@ module.exports = {
   isReady,
   hasSavedSession,
   getContactStats,
+  getSessionPath,
+  getDataRoot,
   on,
   USE_REMOTE_AUTH,
   remoteBackend: () => remoteBackend,
