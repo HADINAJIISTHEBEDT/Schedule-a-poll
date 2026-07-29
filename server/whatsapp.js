@@ -583,14 +583,7 @@ async function searchChatsDirect(term, filter = 'all', includeContacts = true) {
         };
 
         const contactMatches = (contact, names, id) => {
-          try {
-            if (typeof contact.searchMatch === 'function') {
-              const hit = contact.searchMatch(rawNeedle) || contact.searchMatch(rawNeedle.toLowerCase());
-              if (hit) return true;
-            }
-          } catch {
-            // ignore
-          }
+          // Do not trust WA searchMatch alone — it can return unrelated contacts
           return namesMatch(names, id, rawNeedle);
         };
 

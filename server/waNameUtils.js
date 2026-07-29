@@ -178,7 +178,6 @@ function namesMatch(nameOrNames, id, term) {
       if (foldedNeedle.includes(foldedToken) && foldedNeedle.length <= foldedToken.length + 1) {
         return true;
       }
-      if (editDistance(foldedToken, foldedNeedle) <= 1) return true;
     }
 
     const idPart = String(id || '').split('@')[0];
@@ -380,7 +379,6 @@ const BROWSER_SOURCE = `
         if (foldedToken === foldedNeedle) return true;
         if (foldedToken.includes(foldedNeedle) && foldedToken.length <= foldedNeedle.length + 1) return true;
         if (foldedNeedle.includes(foldedToken) && foldedNeedle.length <= foldedToken.length + 1) return true;
-        if (editDistance(foldedToken, foldedNeedle) <= 1) return true;
       }
 
       const idPart = String(id || '').split('@')[0];
