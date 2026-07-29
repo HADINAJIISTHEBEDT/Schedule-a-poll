@@ -110,29 +110,107 @@ function consonantSkeleton(text) {
   return foldArabizi(text).replace(/[aeiou]/g, '');
 }
 
+function editDistance(a, b) {
+  const s = String(a || '');
+  const t = String(b || '');
+  if (s === t) return 0;
+  if (!s.length) return t.length;
+  if (!t.length) return s.length;
+  if (Math.abs(s.length - t.length) > 2) return 99;
+  const prev = new Array(t.length + 1);
+  const cur = new Array(t.length + 1);
+  for (let j = 0; j <= t.length; j++) prev[j] = j;
+  for (let i = 1; i <= s.length; i++) {
+    cur[0] = i;
+    for (let j = 1; j <= t.length; j++) {
+      const cost = s[i - 1] === t[j - 1] ? 0 : 1;
+      cur[j] = Math.min(cur[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost);
+    }
+    for (let j = 0; j <= t.length; j++) prev[j] = cur[j];
+  }
+  return prev[t.length];
+}
+
+function tokenizeName(text) {
+  return toNameString(text)
+    .split(/[^\p{L}\p{N}]+/u)
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 2);
+}
+
 function namesMatch(nameOrNames, id, term) {
   const values = Array.isArray(nameOrNames) ? nameOrNames : [nameOrNames];
-  const needle = foldArabizi(term);
-  if (!needle) return false;
-  const needleSkel = consonantSkeleton(term);
+  const rawNeedle = toNameString(term)
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim();
+  if (!rawNeedle) return false;
+  const foldedNeedle = foldArabizi(term);
 
   for (const value of values) {
-    const folded = foldArabizi(value);
-    if (folded && (folded.includes(needle) || needle.includes(folded))) return true;
-    const skel = consonantSkeleton(value);
-    // "7ayety" ↔ "حياتي" (7yaty) via consonant skeleton 7yty
-    if (needleSkel.length >= 3 && skel.length >= 3) {
-      if (skel.includes(needleSkel) || needleSkel.includes(skel)) return true;
+    const text = toNameString(value);
+    if (!text) continue;
+
+    const lower = text
+      .toLowerCase()
+      .normalize('NFKD')
+      .replace(/[\u0300-\u036f]/g, '');
+
+    // Direct match — "Nouraty 7ayety" contains "7ayety"
+    if (lower.includes(rawNeedle)) return true;
+
+    // Token-level Arabizi / Arabic — require near-equality on a token,
+    // NOT loose consonant skeletons (that falsely matched "عائلتي حياتي")
+    for (const token of tokenizeName(text)) {
+      const tokenLower = token
+        .toLowerCase()
+        .normalize('NFKD')
+        .replace(/[\u0300-\u036f]/g, '');
+      if (tokenLower.includes(rawNeedle)) return true;
+
+      const foldedToken = foldArabizi(token);
+      if (!foldedToken) continue;
+      if (foldedToken === foldedNeedle) return true;
+      if (foldedToken.includes(foldedNeedle) && foldedToken.length <= foldedNeedle.length + 1) {
+        return true;
+      }
+      if (foldedNeedle.includes(foldedToken) && foldedNeedle.length <= foldedToken.length + 1) {
+        return true;
+      }
+      if (editDistance(foldedToken, foldedNeedle) <= 1) return true;
     }
+
+    const idPart = String(id || '').split('@')[0];
+    if (foldArabizi(idPart).includes(foldedNeedle) && foldedNeedle.length >= 3) return true;
+
+    const digits = idPart.replace(/\D/g, '');
+    const termDigits = String(term || '').replace(/\D/g, '');
+    if (termDigits.length >= 3 && digits.includes(termDigits)) return true;
   }
 
-  const idPart = String(id || '').split('@')[0];
-  if (foldArabizi(idPart).includes(needle)) return true;
-
-  const digits = idPart.replace(/\D/g, '');
-  const termDigits = String(term || '').replace(/\D/g, '');
-  if (termDigits.length >= 3 && digits.includes(termDigits)) return true;
   return false;
+}
+
+/** Prefer phone (@c.us) over LID duplicates with the same display name. */
+function dedupeSearchResults(results = []) {
+  const rank = (id) => {
+    const s = String(id || '');
+    if (s.endsWith('@c.us')) return 0;
+    if (s.endsWith('@g.us')) return 1;
+    if (s.endsWith('@lid')) return 3;
+    return 2;
+  };
+  const sorted = [...results].sort((a, b) => rank(a.id) - rank(b.id));
+  const seenName = new Set();
+  const out = [];
+  for (const item of sorted) {
+    const key = foldArabizi(item.name) || String(item.id || '');
+    if (key && seenName.has(key)) continue;
+    if (key) seenName.add(key);
+    out.push(item);
+  }
+  return out;
 }
 
 function preferBetterName(current, incoming) {
@@ -242,28 +320,75 @@ const BROWSER_SOURCE = `
       .trim();
   }
 
-  function consonantSkeleton(text) {
-    return foldArabizi(text).replace(/[aeiou]/g, '');
+  function editDistance(a, b) {
+    const s = String(a || '');
+    const t = String(b || '');
+    if (s === t) return 0;
+    if (!s.length) return t.length;
+    if (!t.length) return s.length;
+    if (Math.abs(s.length - t.length) > 2) return 99;
+    const prev = new Array(t.length + 1);
+    const cur = new Array(t.length + 1);
+    for (let j = 0; j <= t.length; j++) prev[j] = j;
+    for (let i = 1; i <= s.length; i++) {
+      cur[0] = i;
+      for (let j = 1; j <= t.length; j++) {
+        const cost = s[i - 1] === t[j - 1] ? 0 : 1;
+        cur[j] = Math.min(cur[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost);
+      }
+      for (let j = 0; j <= t.length; j++) prev[j] = cur[j];
+    }
+    return prev[t.length];
+  }
+
+  function tokenizeName(text) {
+    return toNameString(text)
+      .split(/[^\\p{L}\\p{N}]+/u)
+      .map((t) => t.trim())
+      .filter((t) => t.length >= 2);
   }
 
   function namesMatch(nameOrNames, id, term) {
     const values = Array.isArray(nameOrNames) ? nameOrNames : [nameOrNames];
-    const needle = foldArabizi(term);
-    if (!needle) return false;
-    const needleSkel = consonantSkeleton(term);
+    const rawNeedle = toNameString(term)
+      .toLowerCase()
+      .normalize('NFKD')
+      .replace(/[\\u0300-\\u036f]/g, '')
+      .trim();
+    if (!rawNeedle) return false;
+    const foldedNeedle = foldArabizi(term);
+
     for (const value of values) {
-      const folded = foldArabizi(value);
-      if (folded && (folded.includes(needle) || needle.includes(folded))) return true;
-      const skel = consonantSkeleton(value);
-      if (needleSkel.length >= 3 && skel.length >= 3) {
-        if (skel.includes(needleSkel) || needleSkel.includes(skel)) return true;
+      const text = toNameString(value);
+      if (!text) continue;
+      const lower = text
+        .toLowerCase()
+        .normalize('NFKD')
+        .replace(/[\\u0300-\\u036f]/g, '');
+      if (lower.includes(rawNeedle)) return true;
+
+      const tokens = tokenizeName(text);
+      for (let i = 0; i < tokens.length; i++) {
+        const token = tokens[i];
+        const tokenLower = token
+          .toLowerCase()
+          .normalize('NFKD')
+          .replace(/[\\u0300-\\u036f]/g, '');
+        if (tokenLower.includes(rawNeedle)) return true;
+        const foldedToken = foldArabizi(token);
+        if (!foldedToken) continue;
+        if (foldedToken === foldedNeedle) return true;
+        if (foldedToken.includes(foldedNeedle) && foldedToken.length <= foldedNeedle.length + 1) return true;
+        if (foldedNeedle.includes(foldedToken) && foldedNeedle.length <= foldedToken.length + 1) return true;
+        if (editDistance(foldedToken, foldedNeedle) <= 1) return true;
       }
+
+      const idPart = String(id || '').split('@')[0];
+      if (foldArabizi(idPart).includes(foldedNeedle) && foldedNeedle.length >= 3) return true;
+      const digits = idPart.replace(/\\D/g, '');
+      const termDigits = String(term || '').replace(/\\D/g, '');
+      if (termDigits.length >= 3 && digits.includes(termDigits)) return true;
     }
-    const idPart = String(id || '').split('@')[0];
-    if (foldArabizi(idPart).includes(needle)) return true;
-    const digits = idPart.replace(/\\D/g, '');
-    const termDigits = String(term || '').replace(/\\D/g, '');
-    if (termDigits.length >= 3 && digits.includes(termDigits)) return true;
     return false;
   }
 
@@ -342,5 +467,6 @@ module.exports = {
   namesMatch,
   preferBetterName,
   sanitizeChat,
+  dedupeSearchResults,
   BROWSER_SOURCE,
 };

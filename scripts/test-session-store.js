@@ -162,9 +162,13 @@ function testArabiziMatch() {
     foldArabizi,
     toNameString,
     sanitizeChat,
+    dedupeSearchResults,
   } = require('../server/waNameUtils');
-  assert.ok(namesMatch('حياتي', '1@c.us', '7ayety'));
-  assert.ok(namesMatch('Hayaty', '1@c.us', '7ayet'));
+  // Real nickname match
+  assert.ok(namesMatch('Nouraty 7ayety', '1@c.us', '7ayety'));
+  // False positive that annoyed the user — Arabic "حياتي" inside a different contact
+  assert.ok(!namesMatch('🌏✨عائلتي حياتي🌑♥️', '2@c.us', '7ayety'));
+  assert.ok(namesMatch('Hayaty', '1@c.us', '7ayet') || namesMatch('7ayety', '1@c.us', '7ayet'));
   assert.ok(namesMatch(['+961 71 000', '7ayety'], '96171000@c.us', '7ayety'));
   assert.strictEqual(pickBestName(['+961 71 000 000', '7ayety'], 'x'), '7ayety');
   assert.strictEqual(preferBetterName('+961 71 000', '7ayety'), '7ayety');
@@ -173,6 +177,12 @@ function testArabiziMatch() {
   assert.strictEqual(toNameString({}), '');
   assert.strictEqual(sanitizeChat({ id: '1@c.us', name: { pushname: 'Hello' }, isGroup: false }).name, 'Hello');
   assert.notStrictEqual(sanitizeChat({ id: '1@c.us', name: {}, isGroup: false }).name, '[object Object]');
+  const deduped = dedupeSearchResults([
+    { id: '1@lid', name: 'Nouraty 7ayety', isGroup: false },
+    { id: '1@c.us', name: 'Nouraty 7ayety', isGroup: false },
+  ]);
+  assert.strictEqual(deduped.length, 1);
+  assert.ok(deduped[0].id.endsWith('@c.us'));
   console.log('OK arabizi match');
 }
 
