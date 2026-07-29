@@ -3,8 +3,52 @@
  * BROWSER_SOURCE is injected into puppeteer evaluate() — keep logic identical.
  */
 
+function toNameString(value, depth = 0) {
+  if (value == null || depth > 3) return '';
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    const text = String(value).trim();
+    if (!text || text === '[object Object]' || text === '[object Object Object]') return '';
+    return text;
+  }
+  if (typeof value !== 'object') return '';
+
+  // WhatsApp sometimes returns nested name objects / Wid-like values
+  const keys = [
+    '_serialized',
+    'formattedName',
+    'formattedTitle',
+    'displayName',
+    'pushname',
+    'notifyName',
+    'verifiedName',
+    'shortName',
+    'searchName',
+    'name',
+    'text',
+    'value',
+    'user',
+  ];
+  for (const key of keys) {
+    if (value[key] != null) {
+      const nested = toNameString(value[key], depth + 1);
+      if (nested) return nested;
+    }
+  }
+  if (typeof value.toString === 'function') {
+    try {
+      const raw = value.toString();
+      if (raw && raw !== '[object Object]' && !raw.startsWith('[object ')) {
+        return String(raw).trim();
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return '';
+}
+
 function isPhoneLike(text) {
-  const t = String(text || '').trim();
+  const t = toNameString(text);
   if (!t) return true;
   // +961 70..., 96170..., bare digits, etc.
   if (/^\+?\d[\d\s\-().]{4,}$/.test(t)) return true;
@@ -15,16 +59,14 @@ function isPhoneLike(text) {
 }
 
 function pickBestName(names, fallback) {
-  const list = (names || [])
-    .map((n) => String(n || '').trim())
-    .filter(Boolean);
+  const list = (names || []).map((n) => toNameString(n)).filter(Boolean);
   const human = list.filter((n) => !isPhoneLike(n));
   if (human.length) {
     human.sort((a, b) => b.length - a.length);
     return human[0];
   }
   if (list.length) return list[0];
-  const fb = String(fallback || '').trim();
+  const fb = toNameString(fallback);
   return fb || 'Unknown';
 }
 
@@ -32,7 +74,7 @@ function pickBestName(names, fallback) {
  * Fold Arabic + Arabizi (chat alphabet) so "7ayety" matches "حياتي" / "Hayaty".
  */
 function foldArabizi(text) {
-  return String(text || '')
+  return toNameString(text)
     .toLowerCase()
     .normalize('NFKD')
     .replace(/[\u0300-\u036f]/g, '')
@@ -94,19 +136,59 @@ function namesMatch(nameOrNames, id, term) {
 }
 
 function preferBetterName(current, incoming) {
-  const a = String(current || '').trim();
-  const b = String(incoming || '').trim();
+  const a = toNameString(current);
+  const b = toNameString(incoming);
   if (!b) return a || b;
   if (!a) return b;
+  if (a === '[object Object]') return b;
+  if (b === '[object Object]') return a;
   if (isPhoneLike(a) && !isPhoneLike(b)) return b;
   if (!isPhoneLike(a) && isPhoneLike(b)) return a;
   return a.length >= b.length ? a : b;
 }
 
+function sanitizeChat(chat = {}) {
+  const id = toNameString(chat.id) || (typeof chat.id === 'string' ? chat.id : '');
+  const name = pickBestName([chat.name, chat.formattedTitle, chat.pushname], id.split('@')[0] || 'Unknown');
+  return {
+    id,
+    name: name && name !== '[object Object]' ? name : id.split('@')[0] || 'Unknown',
+    isGroup: Boolean(chat.isGroup),
+  };
+}
+
 /** Source injected into the WhatsApp page (must stay in sync with functions above). */
 const BROWSER_SOURCE = `
+  function toNameString(value, depth) {
+    depth = depth || 0;
+    if (value == null || depth > 3) return '';
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+      const text = String(value).trim();
+      if (!text || text === '[object Object]' || text.indexOf('[object ') === 0) return '';
+      return text;
+    }
+    if (typeof value !== 'object') return '';
+    const keys = [
+      '_serialized', 'formattedName', 'formattedTitle', 'displayName', 'pushname',
+      'notifyName', 'verifiedName', 'shortName', 'searchName', 'name', 'text', 'value', 'user'
+    ];
+    for (var i = 0; i < keys.length; i++) {
+      if (value[keys[i]] != null) {
+        var nested = toNameString(value[keys[i]], depth + 1);
+        if (nested) return nested;
+      }
+    }
+    try {
+      if (typeof value.toString === 'function') {
+        var raw = value.toString();
+        if (raw && raw !== '[object Object]' && raw.indexOf('[object ') !== 0) return String(raw).trim();
+      }
+    } catch (_) {}
+    return '';
+  }
+
   function isPhoneLike(text) {
-    const t = String(text || '').trim();
+    const t = toNameString(text);
     if (!t) return true;
     if (/^\\+?\\d[\\d\\s\\-().]{4,}$/.test(t)) return true;
     if (/^\\d{6,}$/.test(t.replace(/\\D/g, '')) && t.replace(/\\D/g, '').length >= Math.max(6, t.length - 2)) {
@@ -116,19 +198,19 @@ const BROWSER_SOURCE = `
   }
 
   function pickBestName(names, fallback) {
-    const list = (names || []).map((n) => String(n || '').trim()).filter(Boolean);
+    const list = (names || []).map((n) => toNameString(n)).filter(Boolean);
     const human = list.filter((n) => !isPhoneLike(n));
     if (human.length) {
       human.sort((a, b) => b.length - a.length);
       return human[0];
     }
     if (list.length) return list[0];
-    const fb = String(fallback || '').trim();
+    const fb = toNameString(fallback);
     return fb || 'Unknown';
   }
 
   function foldArabizi(text) {
-    return String(text || '')
+    return toNameString(text)
       .toLowerCase()
       .normalize('NFKD')
       .replace(/[\\u0300-\\u036f]/g, '')
@@ -188,8 +270,7 @@ const BROWSER_SOURCE = `
   function collectContactNames(contact) {
     const names = [];
     const push = (value) => {
-      if (value == null) return;
-      const text = String(value).trim();
+      const text = toNameString(value);
       if (text) names.push(text);
     };
 
@@ -254,10 +335,12 @@ const BROWSER_SOURCE = `
 `;
 
 module.exports = {
+  toNameString,
   isPhoneLike,
   pickBestName,
   foldArabizi,
   namesMatch,
   preferBetterName,
+  sanitizeChat,
   BROWSER_SOURCE,
 };

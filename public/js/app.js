@@ -85,8 +85,18 @@ function renderOptions() {
 }
 
 function escapeHtml(str) {
+  let text = '';
+  if (str == null) text = '';
+  else if (typeof str === 'object') {
+    text = str.name || str.pushname || str.text || str._serialized || '';
+    if (typeof text === 'object') text = '';
+    text = String(text);
+  } else {
+    text = String(str);
+  }
+  if (text === '[object Object]') text = '';
   const div = document.createElement('div');
-  div.textContent = str;
+  div.textContent = text;
   return div.innerHTML;
 }
 

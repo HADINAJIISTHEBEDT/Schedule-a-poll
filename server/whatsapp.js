@@ -17,6 +17,9 @@ const contactStore = require('./contactStore');
 const {
   namesMatch,
   preferBetterName,
+  sanitizeChat,
+  pickBestName,
+  toNameString,
   BROWSER_SOURCE,
 } = require('./waNameUtils');
 
@@ -464,8 +467,7 @@ async function fetchChatsDirect({ includeContacts = false } = {}) {
         if (!id) continue;
         const nameCandidates = [];
         const push = (value) => {
-          if (value == null) return;
-          const text = String(value).trim();
+          const text = toNameString(value);
           if (text) nameCandidates.push(text);
         };
         push(chat.formattedTitle);
@@ -496,11 +498,8 @@ async function fetchChatsDirect({ includeContacts = false } = {}) {
   );
 
   return result
-    .map((chat) => ({
-      id: chat.id,
-      name: chat.name || 'Unknown chat',
-      isGroup: Boolean(chat.isGroup),
-    }))
+    .map((chat) => sanitizeChat(chat))
+    .filter((chat) => chat.id)
     .sort((a, b) => {
       if (a.isGroup !== b.isGroup) return a.isGroup ? -1 : 1;
       return a.name.localeCompare(b.name);
@@ -512,7 +511,7 @@ async function searchChatsDirect(term, filter = 'all', includeContacts = true) {
     throw new Error('WhatsApp browser is not available');
   }
 
-  return withTimeout(
+  const raw = await withTimeout(
     client.pupPage.evaluate(
       (searchTerm, chatFilter, withContacts, utilsCode) => {
         // eslint-disable-next-line no-eval
@@ -602,7 +601,11 @@ async function searchChatsDirect(term, filter = 'all', includeContacts = true) {
           if (chatFilter === 'groups' && !isGroup) return false;
           if (chatFilter === 'contacts' && isGroup) return false;
           seen.add(id);
-          results.push({ id, name: name || 'Unknown', isGroup: Boolean(isGroup) });
+          results.push({
+            id,
+            name: pickBestName([name], id.split('@')[0]),
+            isGroup: Boolean(isGroup),
+          });
           return true;
         };
 
@@ -621,8 +624,7 @@ async function searchChatsDirect(term, filter = 'all', includeContacts = true) {
 
             const nameCandidates = [];
             const push = (value) => {
-              if (value == null) return;
-              const text = String(value).trim();
+              const text = toNameString(value);
               if (text) nameCandidates.push(text);
             };
 
@@ -651,10 +653,7 @@ async function searchChatsDirect(term, filter = 'all', includeContacts = true) {
           }
         }
 
-        return results.sort((a, b) => {
-          if (a.isGroup !== b.isGroup) return a.isGroup ? -1 : 1;
-          return a.name.localeCompare(b.name);
-        });
+        return results;
       },
       term,
       filter,
@@ -664,6 +663,14 @@ async function searchChatsDirect(term, filter = 'all', includeContacts = true) {
     SEARCH_TIMEOUT_MS,
     'Search'
   );
+
+  return (raw || [])
+    .map((chat) => sanitizeChat(chat))
+    .filter((chat) => chat.id)
+    .sort((a, b) => {
+      if (a.isGroup !== b.isGroup) return a.isGroup ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
 }
 
 function mergeChatLists(base, extra) {
@@ -997,7 +1004,7 @@ async function persistContactsToStore() {
 
 /** Merge live search / fetch hits into memory and write them to Firestore. */
 function rememberChats(items = []) {
-  const list = (items || []).filter((c) => c && c.id);
+  const list = (items || []).map((c) => sanitizeChat(c)).filter((c) => c.id);
   if (!list.length) return;
 
   cachedChats = mergeChatLists(cachedChats || [], list);
@@ -1406,9 +1413,13 @@ async function searchViaClientChats(term, filter = 'all') {
     const isGroup = Boolean(chat.isGroup) || id.endsWith('@g.us');
     if (filter === 'groups' && !isGroup) continue;
     if (filter === 'contacts' && isGroup) continue;
-    const name = chat.name || chat.formattedTitle || id.split('@')[0] || 'Unknown';
-    if (!matchSearchTerm(name, id, term)) continue;
-    mapped.push({ id, name, isGroup });
+    const cleaned = sanitizeChat({
+      id,
+      name: pickBestName([chat.name, chat.formattedTitle], id.split('@')[0]),
+      isGroup,
+    });
+    if (!matchSearchTerm(cleaned.name, cleaned.id, term)) continue;
+    mapped.push(cleaned);
     if (mapped.length >= 50) break;
   }
   return mapped;

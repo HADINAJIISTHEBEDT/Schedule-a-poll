@@ -155,13 +155,24 @@ function testMergeChatLists() {
 }
 
 function testArabiziMatch() {
-  const { namesMatch, pickBestName, preferBetterName, foldArabizi } = require('../server/waNameUtils');
+  const {
+    namesMatch,
+    pickBestName,
+    preferBetterName,
+    foldArabizi,
+    toNameString,
+    sanitizeChat,
+  } = require('../server/waNameUtils');
   assert.ok(namesMatch('حياتي', '1@c.us', '7ayety'));
   assert.ok(namesMatch('Hayaty', '1@c.us', '7ayet'));
   assert.ok(namesMatch(['+961 71 000', '7ayety'], '96171000@c.us', '7ayety'));
   assert.strictEqual(pickBestName(['+961 71 000 000', '7ayety'], 'x'), '7ayety');
   assert.strictEqual(preferBetterName('+961 71 000', '7ayety'), '7ayety');
   assert.strictEqual(foldArabizi('حياتي'), '7yaty');
+  assert.strictEqual(toNameString({ name: 'Nouraty 7ayety' }), 'Nouraty 7ayety');
+  assert.strictEqual(toNameString({}), '');
+  assert.strictEqual(sanitizeChat({ id: '1@c.us', name: { pushname: 'Hello' }, isGroup: false }).name, 'Hello');
+  assert.notStrictEqual(sanitizeChat({ id: '1@c.us', name: {}, isGroup: false }).name, '[object Object]');
   console.log('OK arabizi match');
 }
 
