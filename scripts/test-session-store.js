@@ -154,6 +154,17 @@ function testMergeChatLists() {
   console.log('OK merge chat lists');
 }
 
+function testArabiziMatch() {
+  const { namesMatch, pickBestName, preferBetterName, foldArabizi } = require('../server/waNameUtils');
+  assert.ok(namesMatch('حياتي', '1@c.us', '7ayety'));
+  assert.ok(namesMatch('Hayaty', '1@c.us', '7ayet'));
+  assert.ok(namesMatch(['+961 71 000', '7ayety'], '96171000@c.us', '7ayety'));
+  assert.strictEqual(pickBestName(['+961 71 000 000', '7ayety'], 'x'), '7ayety');
+  assert.strictEqual(preferBetterName('+961 71 000', '7ayety'), '7ayety');
+  assert.strictEqual(foldArabizi('حياتي'), '7yaty');
+  console.log('OK arabizi match');
+}
+
 (async () => {
   await testProtectedDelete();
   await testChunkRoundTripMath();
@@ -162,6 +173,7 @@ function testMergeChatLists() {
   testBackendPreference();
   testContactDocId();
   testMergeChatLists();
+  testArabiziMatch();
   console.log('All local session-store tests passed');
 })().catch((err) => {
   console.error(err);
