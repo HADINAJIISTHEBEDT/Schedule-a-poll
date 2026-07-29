@@ -708,8 +708,13 @@ function searchCachedChats(term, filter, includeContacts) {
     .slice(0, 50);
 }
 
-function finalizeSearchResults(results) {
-  return dedupeSearchResults(results || []).slice(0, 50);
+function finalizeSearchResults(results, term = '') {
+  const filtered = (results || []).filter((r) => {
+    if (!r?.id) return false;
+    if (!term) return true;
+    return namesMatch(r.name, r.id, term);
+  });
+  return dedupeSearchResults(filtered).slice(0, 50);
 }
 
 async function fetchAndCacheChats({ refresh = false, includeContacts = false } = {}) {
@@ -1362,7 +1367,7 @@ async function searchChats({ query = '', filter = 'all', includeContacts = true 
         const live = await searchChatsDirect(term, filter, includeContacts);
         if (live.length > 0) {
           // THIS was missing — search hits never got written to Firebase
-          const cleaned = finalizeSearchResults(live);
+          const cleaned = finalizeSearchResults(live, term);
           rememberChats(cleaned);
           return cleaned;
         }
@@ -1374,7 +1379,7 @@ async function searchChats({ query = '', filter = 'all', includeContacts = true 
       try {
         const fromChats = await searchViaClientChats(term, filter);
         if (fromChats.length > 0) {
-          const cleaned = finalizeSearchResults(fromChats);
+          const cleaned = finalizeSearchResults(fromChats, term);
           rememberChats(cleaned);
           return cleaned;
         }
@@ -1383,7 +1388,10 @@ async function searchChats({ query = '', filter = 'all', includeContacts = true 
       }
 
       if (cachedChats.length > 0 || (cachedContacts && cachedContacts.length)) {
-        const cached = finalizeSearchResults(searchCachedChats(term, filter, includeContacts));
+        const cached = finalizeSearchResults(
+          searchCachedChats(term, filter, includeContacts),
+          term
+        );
         if (cached.length > 0) return cached;
       }
     }
@@ -1392,7 +1400,7 @@ async function searchChats({ query = '', filter = 'all', includeContacts = true 
   // Fallback: saved contacts/chats from Firestore (works while reconnecting)
   await hydrateContactsFromStore();
   if (cachedChats.length > 0 || (cachedContacts && cachedContacts.length > 0)) {
-    return finalizeSearchResults(searchCachedChats(term, filter, includeContacts));
+    return finalizeSearchResults(searchCachedChats(term, filter, includeContacts), term);
   }
 
   throw new Error(
