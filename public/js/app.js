@@ -7,6 +7,7 @@ const state = {
   options: ['', ''],
   chatFilter: 'all',
   connectionState: 'disconnected',
+  hasSession: false,
   searching: false,
   lastSearchQuery: '',
   connectInFlight: false,
@@ -111,8 +112,9 @@ function renderChats() {
   const previousScroll = els.chatList?.scrollTop || 0;
   const preserveScroll = state.searchResults.length > 0 && query === state.lastSearchQuery;
   let html = '';
+  const canSearchOffline = state.hasSession && query.length >= 1;
 
-  if (state.connectionState !== 'ready') {
+  if (state.connectionState !== 'ready' && !canSearchOffline) {
     setSearchDropdownOpen(false);
     const emptyMessage =
       state.connectionState === 'qr'
@@ -252,6 +254,7 @@ function applySavedLoginHint() {
 function updateConnectionUI({ state: connState, qr, connectedInfo, hasSession, restoring }) {
   const wasReady = state.connectionState === 'ready';
   state.connectionState = connState;
+  state.hasSession = Boolean(hasSession);
   els.statusDot.className = `status-dot ${connState}`;
 
   const labels = {
@@ -473,7 +476,8 @@ async function searchChats(query) {
     return;
   }
 
-  if (state.connectionState !== 'ready') {
+  // Allow search while reconnecting if a saved session exists (Firestore contact cache)
+  if (state.connectionState !== 'ready' && !state.hasSession) {
     renderChats();
     return;
   }

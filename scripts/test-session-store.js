@@ -1,5 +1,5 @@
 /**
- * Local tests for Firestore session store helpers (no live Firebase required).
+ * Local tests for Firestore session + contact helpers (no live Firebase required).
  */
 const assert = require('assert');
 const fs = require('fs');
@@ -12,6 +12,7 @@ const {
   isSessionMetaUsable,
   CHUNK_BYTES,
 } = require('../server/waSessionStore');
+const { contactDocId } = require('../server/contactStore');
 
 async function testProtectedDelete() {
   let deleted = false;
@@ -60,7 +61,6 @@ async function testZipPath() {
 function testSessionMetaUsable() {
   assert.strictEqual(isSessionMetaUsable({}), false);
   assert.strictEqual(isSessionMetaUsable({ chunkCount: 0 }), false);
-  // Legacy sessions saved before ready flag
   assert.strictEqual(isSessionMetaUsable({ chunkCount: 3 }), true);
   assert.strictEqual(isSessionMetaUsable({ chunkCount: 3, ready: true }), true);
   assert.strictEqual(isSessionMetaUsable({ chunkCount: 3, ready: false }), false);
@@ -68,7 +68,6 @@ function testSessionMetaUsable() {
     isSessionMetaUsable({ chunkCount: 3, ready: false, writing: true }),
     false
   );
-  // Previous ready session while a new write is marked (we keep ready true now)
   assert.strictEqual(
     isSessionMetaUsable({ chunkCount: 3, ready: true, writing: true }),
     true
@@ -90,7 +89,6 @@ function testBackendPreference() {
     process.env.MONGODB_URI = 'mongodb+srv://x';
     delete process.env.WA_SESSION_BACKEND;
 
-    // Re-require whatsapp flags via inline logic mirror
     const { isFirebaseConfigured } = require('../server/firebase');
     const { isMongoConfigured } = require('../server/mongo');
     assert.strictEqual(isFirebaseConfigured(), true);
@@ -123,12 +121,47 @@ function testBackendPreference() {
   console.log('OK backend preference');
 }
 
+function testContactDocId() {
+  const id = '15551234567@c.us';
+  const docId = contactDocId(id);
+  assert.strictEqual(docId, encodeURIComponent(id));
+  assert.ok(!docId.includes('/'));
+  assert.strictEqual(decodeURIComponent(docId), id);
+  console.log('OK contact doc id');
+}
+
+function testMergeChatLists() {
+  function mergeChatLists(base, extra) {
+    const seen = new Set(base.map((c) => c.id));
+    const merged = [...base];
+    for (const item of extra) {
+      if (!seen.has(item.id)) {
+        seen.add(item.id);
+        merged.push(item);
+      }
+    }
+    return merged;
+  }
+
+  const cached = [{ id: '1@c.us', name: 'A', isGroup: false }];
+  const live = [
+    { id: '1@c.us', name: 'A', isGroup: false },
+    { id: '2@c.us', name: 'B', isGroup: false },
+  ];
+  const out = mergeChatLists(cached, live);
+  assert.strictEqual(out.length, 2);
+  assert.strictEqual(out[1].id, '2@c.us');
+  console.log('OK merge chat lists');
+}
+
 (async () => {
   await testProtectedDelete();
   await testChunkRoundTripMath();
   await testZipPath();
   testSessionMetaUsable();
   testBackendPreference();
+  testContactDocId();
+  testMergeChatLists();
   console.log('All local session-store tests passed');
 })().catch((err) => {
   console.error(err);

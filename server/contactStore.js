@@ -1,7 +1,16 @@
-const { getFirestore } = require('./firebase');
+const { getFirestore, initFirebaseAdmin, isFirebaseConfigured } = require('./firebase');
 const { isMongoConfigured, connectMongo, getMongoose } = require('./mongo');
 
 const COLLECTION = 'wa_contacts';
+
+function contactDocId(id) {
+  // Firestore doc ids cannot contain "/"; WA ids use @ which is fine once encoded.
+  return encodeURIComponent(String(id)).slice(0, 700);
+}
+
+function getDb() {
+  return getFirestore() || initFirebaseAdmin();
+}
 
 /**
  * Persist chats/contacts so search still works after Render restarts
@@ -24,12 +33,12 @@ async function saveContacts(contacts = []) {
   // Default: Firestore (user already has Firebase). Mongo only if preferred.
   if (!preferMongo) {
     try {
-      const db = getFirestore();
+      const db = getDb();
       if (db) {
         let batch = db.batch();
         let ops = 0;
         for (const doc of list) {
-          batch.set(db.collection(COLLECTION).doc(encodeURIComponent(doc.id)), doc, { merge: true });
+          batch.set(db.collection(COLLECTION).doc(contactDocId(doc.id)), doc, { merge: true });
           ops += 1;
           if (ops >= 400) {
             await batch.commit();
@@ -41,6 +50,10 @@ async function saveContacts(contacts = []) {
         console.log(`Saved ${list.length} contacts/chats to Firestore`);
         return list.length;
       }
+      console.warn(
+        'Firestore contact save skipped — Firebase Admin not ready',
+        isFirebaseConfigured() ? '(init failed)' : '(missing FIREBASE_CLIENT_EMAIL / FIREBASE_PRIVATE_KEY)'
+      );
     } catch (err) {
       console.warn('Firestore contact save failed:', err.message);
     }
@@ -98,15 +111,24 @@ async function loadContacts() {
   }
 
   try {
-    const db = getFirestore();
+    const db = getDb();
     if (db) {
       const snap = await db.collection(COLLECTION).limit(5000).get();
       if (!snap.empty) {
+        console.log(`Loaded ${snap.size} contacts/chats from Firestore`);
         return snap.docs.map((d) => {
           const r = d.data() || {};
+          let id = r.id;
+          if (!id) {
+            try {
+              id = decodeURIComponent(d.id);
+            } catch {
+              id = d.id;
+            }
+          }
           return {
-            id: r.id || decodeURIComponent(d.id),
-            name: r.name || r.id || d.id,
+            id,
+            name: r.name || id || d.id,
             isGroup: Boolean(r.isGroup),
           };
         });
@@ -151,7 +173,7 @@ async function clearContacts() {
   }
 
   try {
-    const db = getFirestore();
+    const db = getDb();
     if (!db) return;
     const snap = await db.collection(COLLECTION).limit(400).get();
     if (snap.empty) return;
@@ -165,8 +187,26 @@ async function clearContacts() {
   }
 }
 
+async function countContacts() {
+  try {
+    const preferMongo = String(process.env.WA_SESSION_BACKEND || '').toLowerCase() === 'mongodb';
+    if (preferMongo && isMongoConfigured()) {
+      await connectMongo();
+      return getMongoose().connection.db.collection(COLLECTION).countDocuments();
+    }
+    const db = getDb();
+    if (!db) return 0;
+    const snap = await db.collection(COLLECTION).limit(5000).get();
+    return snap.size;
+  } catch {
+    return 0;
+  }
+}
+
 module.exports = {
   saveContacts,
   loadContacts,
   clearContacts,
+  countContacts,
+  contactDocId,
 };

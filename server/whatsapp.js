@@ -857,11 +857,15 @@ async function fetchAndCacheChats({ refresh = false, includeContacts = false } =
 
       if (includeContacts) {
         cachedContacts = (await fetchChatsDirect({ includeContacts: true })).filter((c) => !c.isGroup);
-        persistContactsToStore().catch(() => {});
+        persistContactsToStore().catch((err) => {
+          console.warn('persistContactsToStore failed:', err.message);
+        });
         return mergeChatLists(cachedChats, cachedContacts);
       }
 
-      persistContactsToStore().catch(() => {});
+      persistContactsToStore().catch((err) => {
+        console.warn('persistContactsToStore failed:', err.message);
+      });
       return cachedChats;
     } catch (err) {
       lastError = err;
@@ -1105,8 +1109,56 @@ async function forceRemoteSessionBackup(instance = client) {
 
 async function persistContactsToStore() {
   const all = mergeChatLists(cachedChats || [], cachedContacts || []);
-  if (!all.length) return;
-  await contactStore.saveContacts(all);
+  if (!all.length) {
+    console.warn('Contact persist skipped — nothing in memory to save yet');
+    return 0;
+  }
+  const saved = await contactStore.saveContacts(all);
+  if (!saved) {
+    console.warn('Contact persist returned 0 — check Firebase Admin credentials');
+  }
+  return saved;
+}
+
+/** Merge live search / fetch hits into memory and write them to Firestore. */
+function rememberChats(items = []) {
+  const list = (items || []).filter((c) => c && c.id);
+  if (!list.length) return;
+
+  cachedChats = mergeChatLists(cachedChats || [], list);
+  const people = list.filter((c) => !c.isGroup);
+  if (people.length) {
+    cachedContacts = mergeChatLists(cachedContacts || [], people);
+  }
+  chatsCacheTime = Date.now();
+  persistContactsToStore().catch((err) => {
+    console.warn('Contact persist failed:', err.message);
+  });
+}
+
+function scheduleContactBackups(instance) {
+  const delays = [8_000, 20_000, 45_000, 90_000];
+  for (const ms of delays) {
+    setTimeout(() => {
+      if (!instance || client !== instance || connectionState !== 'ready') return;
+      fetchAndCacheChats({ refresh: true, includeContacts: true })
+        .then((rows) => {
+          console.log(`Contact backup ok (${rows.length} rows in memory)`);
+          return persistContactsToStore();
+        })
+        .catch((err) => {
+          console.warn(`Contact backup at ${ms}ms failed:`, err.message);
+        });
+    }, ms);
+  }
+}
+
+function getContactStats() {
+  return {
+    chatsCached: Array.isArray(cachedChats) ? cachedChats.length : 0,
+    contactsCached: Array.isArray(cachedContacts) ? cachedContacts.length : 0,
+    contactsHydrated,
+  };
 }
 
 
@@ -1238,11 +1290,13 @@ function createClient() {
     setTimeout(() => {
       forceRemoteSessionBackup(instance).catch(() => {});
     }, 25000);
+    // Contacts often are not synced at the exact ready moment — retry several times
     fetchAndCacheChats({ refresh: true, includeContacts: true })
       .then(() => persistContactsToStore())
       .catch((err) => {
         console.error('Chat/contact cache warmup failed:', err.message);
       });
+    scheduleContactBackups(instance);
   });
 
   instance.on('change_state', (state) => {
@@ -1426,7 +1480,11 @@ async function searchChats({ query = '', filter = 'all', includeContacts = true 
     if (connected) {
       try {
         const live = await searchChatsDirect(term, filter, includeContacts);
-        if (live.length > 0) return live;
+        if (live.length > 0) {
+          // THIS was missing — search hits never got written to Firebase
+          rememberChats(live);
+          return live;
+        }
         if (cachedChats.length > 0 || (cachedContacts && cachedContacts.length)) {
           const cached = searchCachedChats(term, filter, includeContacts);
           if (cached.length > 0) return cached;
@@ -1441,7 +1499,7 @@ async function searchChats({ query = '', filter = 'all', includeContacts = true 
     }
   }
 
-  // Fallback: saved contacts/chats from MongoDB/Firestore (works while reconnecting)
+  // Fallback: saved contacts/chats from Firestore (works while reconnecting)
   await hydrateContactsFromStore();
   if (cachedChats.length > 0 || (cachedContacts && cachedContacts.length > 0)) {
     return searchCachedChats(term, filter, includeContacts);
@@ -1816,6 +1874,7 @@ module.exports = {
   sendPollToChats,
   isReady,
   hasSavedSession,
+  getContactStats,
   on,
   USE_REMOTE_AUTH,
   remoteBackend: () => remoteBackend,

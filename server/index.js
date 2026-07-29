@@ -99,6 +99,8 @@ app.get('/api/health', (_req, res) => {
   const remoteAuth = Boolean(whatsapp.USE_REMOTE_AUTH);
   const backend =
     typeof whatsapp.remoteBackend === 'function' ? whatsapp.remoteBackend() : 'local';
+  const contactStats =
+    typeof whatsapp.getContactStats === 'function' ? whatsapp.getContactStats() : {};
   res.json({
     ok: true,
     dataDir,
@@ -108,6 +110,8 @@ app.get('/api/health', (_req, res) => {
     sessionBackend: backend,
     hasSession: whatsapp.hasSavedSession(),
     waState: whatsapp.getStatus().state,
+    contactsCached: contactStats.contactsCached || 0,
+    chatsCached: contactStats.chatsCached || 0,
     hint: whatsapp.hasSavedSession()
       ? `WhatsApp login is saved in ${backend}`
       : backend === 'mongodb'
