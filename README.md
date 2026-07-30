@@ -124,7 +124,7 @@ cloudflared tunnel --url http://127.0.0.1:3000
 ```
 
 Current default in the APK/UI:
-**https://valves-energy-totals-articles.trycloudflare.com**
+**https://engaging-mountains-buffalo-commentary.trycloudflare.com**
 
 - Web / APK download: that URL + `/download/apk`
 - WhatsApp login is saved in `./data/whatsapp-session` on this machine

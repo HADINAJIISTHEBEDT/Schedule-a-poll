@@ -3,7 +3,7 @@
  * WhatsApp session is stored on local disk (data/whatsapp-session), not Render.
  * localStorage keeps a UI hint of who is linked so the app restores after reload.
  */
-const DEFAULT_API_BASE = 'https://valves-energy-totals-articles.trycloudflare.com';
+const DEFAULT_API_BASE = 'https://engaging-mountains-buffalo-commentary.trycloudflare.com';
 
 const STORAGE_KEYS = {
   apiBase: 'apiBase',
@@ -53,11 +53,19 @@ function isRenderUrl(url) {
   return /onrender\.com/i.test(String(url || ''));
 }
 
-/** Prefer the Cloudflare tunnel / local host — never keep Render. */
+/** Prefer the current Cloudflare tunnel — drop Render and stale trycloudflare URLs. */
 function migrateAwayFromRender() {
   try {
     const saved = normalizeApiBase(storageGet(STORAGE_KEYS.apiBase) || '');
-    if (!saved || isEphemeralAgentUrl(saved) || isLocalhostUrl(saved) || isRenderUrl(saved)) {
+    const staleTryCloudflare =
+      /trycloudflare\.com/i.test(saved) && saved !== DEFAULT_API_BASE;
+    if (
+      !saved ||
+      isEphemeralAgentUrl(saved) ||
+      isLocalhostUrl(saved) ||
+      isRenderUrl(saved) ||
+      staleTryCloudflare
+    ) {
       storageSet(STORAGE_KEYS.apiBase, DEFAULT_API_BASE);
       storageSet(STORAGE_KEYS.ingressToken, '');
     }
