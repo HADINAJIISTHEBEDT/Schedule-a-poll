@@ -1,9 +1,9 @@
 /**
- * Production backend on Render — same saved-login behavior as localhost.
- * WhatsApp session is stored on the Render disk at /app/data/whatsapp-session.
+ * Default backend = Cloudflare quick tunnel → this machine's localhost:3000.
+ * WhatsApp session is stored on local disk (data/whatsapp-session), not Render.
  * localStorage keeps a UI hint of who is linked so the app restores after reload.
  */
-const DEFAULT_API_BASE = 'https://schedule-a-poll.onrender.com';
+const DEFAULT_API_BASE = 'https://valves-energy-totals-articles.trycloudflare.com';
 
 const STORAGE_KEYS = {
   apiBase: 'apiBase',
@@ -49,11 +49,15 @@ function isLocalhostUrl(url) {
   return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(String(url || ''));
 }
 
-/** Always prefer the permanent Render host (same persistence as local disk). */
-function migrateToRenderServer() {
+function isRenderUrl(url) {
+  return /onrender\.com/i.test(String(url || ''));
+}
+
+/** Prefer the Cloudflare tunnel / local host — never keep Render. */
+function migrateAwayFromRender() {
   try {
     const saved = normalizeApiBase(storageGet(STORAGE_KEYS.apiBase) || '');
-    if (!saved || isEphemeralAgentUrl(saved) || isLocalhostUrl(saved)) {
+    if (!saved || isEphemeralAgentUrl(saved) || isLocalhostUrl(saved) || isRenderUrl(saved)) {
       storageSet(STORAGE_KEYS.apiBase, DEFAULT_API_BASE);
       storageSet(STORAGE_KEYS.ingressToken, '');
     }
@@ -73,12 +77,14 @@ function setIngressToken(token) {
 }
 
 function getApiBase() {
-  // Browser on Render → same-origin (works exactly like opening localhost:3000)
+  // Browser opened via tunnel or localhost → same-origin
   if (!isCapacitorApp()) return '';
 
-  migrateToRenderServer();
+  migrateAwayFromRender();
   const saved = normalizeApiBase(storageGet(STORAGE_KEYS.apiBase) || '');
-  if (saved && !isEphemeralAgentUrl(saved) && !isLocalhostUrl(saved)) return saved;
+  if (saved && !isEphemeralAgentUrl(saved) && !isLocalhostUrl(saved) && !isRenderUrl(saved)) {
+    return saved;
+  }
   return DEFAULT_API_BASE;
 }
 
@@ -93,7 +99,9 @@ function setApiBase(url) {
     let value = normalizeApiBase(
       `${parsed.origin}${parsed.pathname}`.replace(/\/download\/apk\/?$/i, '')
     );
-    if (isEphemeralAgentUrl(value) || isLocalhostUrl(value)) value = DEFAULT_API_BASE;
+    if (isEphemeralAgentUrl(value) || isLocalhostUrl(value) || isRenderUrl(value)) {
+      value = DEFAULT_API_BASE;
+    }
 
     storageSet(STORAGE_KEYS.apiBase, value);
     return;
@@ -102,7 +110,9 @@ function setApiBase(url) {
   }
 
   let value = normalizeApiBase(raw);
-  if (isEphemeralAgentUrl(value) || isLocalhostUrl(value)) value = DEFAULT_API_BASE;
+  if (isEphemeralAgentUrl(value) || isLocalhostUrl(value) || isRenderUrl(value)) {
+    value = DEFAULT_API_BASE;
+  }
   storageSet(STORAGE_KEYS.apiBase, value);
 }
 
@@ -258,7 +268,9 @@ async function readApiJson(res) {
   }
 
   if (/^\s*</.test(text) || /Redirecting to login|Cloud Agent Login|network token/i.test(text)) {
-    throw new Error('Unable to reach server — set Server to https://schedule-a-poll.onrender.com');
+    throw new Error(
+      `Unable to reach server — set Server to ${DEFAULT_API_BASE}`
+    );
   }
 
   try {
@@ -268,4 +280,4 @@ async function readApiJson(res) {
   }
 }
 
-migrateToRenderServer();
+migrateAwayFromRender();

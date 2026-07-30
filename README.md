@@ -114,88 +114,31 @@ POST /api/polls
 | Poll failed to send | Check the chat still exists; reconnect WhatsApp |
 | Session expired | Disconnect and scan QR again |
 
-## Deploy on Render
+## Public URL (Cloudflare quick tunnel — not Render)
 
-1. Use the **`main`** branch (must contain `package.json` at the repo root)
-2. Go to [render.com](https://render.com) → **New** → **Blueprint**
-3. Connect your GitHub repo `HADINAJIISTHEBEDT/Schedule-a-poll`
-4. Render will read `render.yaml` and deploy automatically
-5. Open your Render URL (e.g. `https://schedule-a-poll.onrender.com`)
-6. Connect WhatsApp via QR code
+This app runs on **localhost** and is exposed with a temporary Cloudflare URL:
 
-**Important for Render:**
-- Use **Docker** environment (not Node) — WhatsApp needs Chromium
-- **Root Directory must be blank** — do NOT set it to `src`
-- Use the **Starter** plan or higher
-- A **persistent disk** is configured for WhatsApp session data (`/app/data`)
-- Scan the QR **once** — the login is saved on the disk and survives deploys/restarts
-- Only tap **Disconnect** if you want to unlink and require a new QR scan
+```bash
+npm start
+cloudflared tunnel --url http://127.0.0.1:3000
+```
 
-### Fix: `ENOENT package.json` / `project/src/package.json`
+Current default in the APK/UI:
+**https://valves-energy-totals-articles.trycloudflare.com**
 
-This error means Render is looking in the wrong folder. Fix it:
-
-| Setting | Correct value |
-|---------|----------------|
-| **Environment** | **Docker** |
-| **Root Directory** | *(leave blank)* |
-| **Branch** | `main` |
-| **Dockerfile Path** | `./Dockerfile` |
-
-If you created a **Node** service by mistake, delete it and redeploy with **Docker** or **Blueprint**.
-
-### Manual Render setup (without Blueprint)
-
-| Setting | Value |
-|---------|-------|
-| Environment | **Docker** |
-| Root Directory | *(blank — not `src`)* |
-| Branch | `main` |
-| Dockerfile Path | `./Dockerfile` |
-| Health Check | `/api/health` |
-| Disk | Mount `/app/data` (1 GB) |
+- Web / APK download: that URL + `/download/apk`
+- WhatsApp login is saved in `./data/whatsapp-session` on this machine
+- Quick tunnel URLs change when restarted — update the APK Server setting if needed
+- **Render is not used**
 
 ## Android APK
 
-Download the mobile app:
+Download: open the trycloudflare URL above → `/download/apk`  
+Or: `https://github.com/HADINAJIISTHEBEDT/Schedule-a-poll/raw/main/releases/poll-scheduler.apk`
 
-## Render setup — same as localhost (Disk LocalAuth)
+In the APK, Server = the trycloudflare URL (not Render).
 
-WhatsApp login is stored on disk, same layout as local:
-
-| Localhost | Render |
-|-----------|--------|
-| `./data/whatsapp-session` | `/app/data/whatsapp-session` |
-| `./data/wa_contacts.json` | `/app/data/wa_contacts.json` |
-
-**You need a Render Disk** mounted at `/app/data` (Blueprint already defines this). Without it, every deploy wipes the login.
-
-### Env vars on Render
-
-| Key | Value |
-|-----|--------|
-| `DATA_DIR` | `/app/data` |
-| `WA_REMOTE_AUTH` | `false` |
-| `PUPPETEER_EXECUTABLE_PATH` | `/usr/bin/chromium` |
-| `HOST` | `0.0.0.0` |
-
-Firebase env vars are optional (extra contact copy / polls). They must **not** force RemoteAuth — keep `WA_REMOTE_AUTH=false`.
-
-### After deploy
-1. https://schedule-a-poll.onrender.com/api/health → `"sessionBackend":"local"`, `"dataDirWritable":true`
-2. Connect WhatsApp → scan QR once
-3. `/api/health` should show `"hasSession":true`
-4. Search a contact — saved to `/app/data/wa_contacts.json`
-5. Redeploy/restart — login + contacts restore from Disk (like localhost)
-
-**Web:** https://schedule-a-poll.onrender.com  
-**APK:** https://schedule-a-poll.onrender.com/download/apk  
-
-In the APK, Server = `https://schedule-a-poll.onrender.com`.
-
-Also works: `/download`, `/apk`, `/releases/poll-scheduler.apk` on the same host.
-
-Or from GitHub: `https://github.com/HADINAJIISTHEBEDT/Schedule-a-poll/raw/main/releases/poll-scheduler.apk`
+Also works on the tunnel host: `/download`, `/apk`, `/releases/poll-scheduler.apk`
 
 ### How to use the APK
 

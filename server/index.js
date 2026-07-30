@@ -42,11 +42,19 @@ app.use(express.static(path.join(__dirname, '..', 'public')));
 
 const apkPath = path.join(__dirname, '..', 'releases', 'poll-scheduler.apk');
 
+function publicOrigin(req) {
+  const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0].trim();
+  const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
+  if (!host) return '';
+  return `${proto}://${host}`;
+}
+
 function sendApk(req, res) {
   if (!fs.existsSync(apkPath)) {
+    const origin = publicOrigin(req);
     return res.status(404).json({
       error: 'APK not found on this server',
-      hint: 'Use https://schedule-a-poll.onrender.com/download/apk',
+      hint: origin ? `${origin}/download/apk` : '/download/apk',
     });
   }
   res.setHeader('Cache-Control', 'no-store');
@@ -68,23 +76,24 @@ app.get(
   sendApk
 );
 
-app.get('/api/download', (_req, res) => {
+app.get('/api/download', (req, res) => {
+  const origin = publicOrigin(req);
   if (!fs.existsSync(apkPath)) {
     return res.json({
       available: false,
       url: null,
-      fallback: 'https://schedule-a-poll.onrender.com/download/apk',
+      fallback: origin ? `${origin}/download/apk` : '/download/apk',
     });
   }
   res.json({
     available: true,
     url: '/download/apk',
-    absolute: 'https://schedule-a-poll.onrender.com/download/apk',
+    absolute: origin ? `${origin}/download/apk` : '/download/apk',
   });
 });
 
 app.get('/api/health', (_req, res) => {
-  // Lightweight probe for Render — do not start Chromium here
+  // Lightweight probe — do not start Chromium here
   const dataDir =
     typeof whatsapp.getDataRoot === 'function'
       ? whatsapp.getDataRoot()
@@ -370,7 +379,7 @@ app.listen(PORT, HOST, async () => {
           ? 'No MongoDB WhatsApp session yet — scan QR once'
           : backend === 'firestore'
             ? 'No Firestore WhatsApp session yet — scan QR once (saved to Firebase)'
-            : 'No saved WhatsApp session — set Firebase env vars on Render, then scan QR once'
+            : 'No saved WhatsApp session yet — Connect + scan QR once (saves on local disk)'
       );
     }
   } catch (err) {

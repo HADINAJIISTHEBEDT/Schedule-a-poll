@@ -723,7 +723,7 @@ els.sendNowBtn.addEventListener('click', () => submitPoll(true));
 els.refreshPollsBtn.addEventListener('click', loadPolls);
 
 function openServerSettings() {
-  const base = getApiBase() || DEFAULT_API_BASE || 'https://schedule-a-poll.onrender.com';
+  const base = getApiBase() || DEFAULT_API_BASE;
   els.serverUrlInput.value = base;
   els.serverOverlay.classList.remove('hidden');
 }
@@ -735,7 +735,10 @@ function closeServerSettings() {
 function saveServerSettings() {
   const url = els.serverUrlInput.value.trim();
   if (!url || !/^https?:\/\//i.test(url)) {
-    return showToast('Enter https://schedule-a-poll.onrender.com', 'error');
+    return showToast(`Enter ${DEFAULT_API_BASE}`, 'error');
+  }
+  if (/onrender\.com/i.test(url)) {
+    return showToast('Render is disabled — use the trycloudflare URL', 'error');
   }
   setApiBase(url);
   closeServerSettings();
