@@ -3,7 +3,7 @@
  * WhatsApp session is stored on local disk (data/whatsapp-session), not Render.
  * localStorage keeps a UI hint of who is linked so the app restores after reload.
  */
-const DEFAULT_API_BASE = 'https://engaging-mountains-buffalo-commentary.trycloudflare.com';
+const DEFAULT_API_BASE = 'https://remain-craft-wants-vegetable.trycloudflare.com';
 
 const STORAGE_KEYS = {
   apiBase: 'apiBase',
